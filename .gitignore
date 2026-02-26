@@ -3,3 +3,5 @@ node_modules/
 auth/
 *.log
 .DS_Store
+dist/
+build/
