@@ -1,0 +1,25 @@
+{
+  "name": "tragical-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@fastify/express": "^4.0.4",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "axios": "^1.13.5",
+    "dotenv": "^17.3.1",
+    "mongoose": "^9.2.2",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

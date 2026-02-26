@@ -1,0 +1,5 @@
+{
+  "ignore": ["auth/*", "node_modules/*", "logs/*", "*.db"],
+  "watch": ["."],
+  "ext": "js,mjs,cjs,json"
+}

@@ -1,0 +1,234 @@
+// index.js - Main Bot Entry Point
+require('dotenv').config();
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const Pino = require('pino');
+const qrcode = require('qrcode-terminal');
+const connectDB = require('./config/database');
+const { log } = require('./utils/logger');
+const User = require('./models/User');
+const Group = require('./models/Group');
+const fs = require('fs');
+
+// Connect to MongoDB
+connectDB();
+
+async function startBot() {
+    log('INFO', '🚀 Starting TRAGICAL Bot...');
+    
+    // Get latest version
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    log('INFO', `📱 Using WA v${version.join('.')}, isLatest: ${isLatest}`);
+
+    // Ensure auth folder exists
+    const authFolder = process.env.SESSION_FOLDER || 'auth';
+    if (!fs.existsSync(authFolder)) {
+        fs.mkdirSync(authFolder, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+    
+    const sock = makeWASocket({
+        version,
+        logger: Pino({ level: 'silent' }),
+    const sock = makeWASocket({
+        version,
+        logger: Pino({ level: 'silent' }),
+        auth: state,
+        browser: ['TRAGICAL', 'Chrome', '3.0.0'],
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        shouldSyncHistory: false
+    });
+        auth: state,
+        browser: ['TRAGICAL', 'Chrome', '3.0.0'],
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        shouldSyncHistory: false
+    });
+
+    // Handle connection updates
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, qr, lastDisconnect } = update;
+        
+        // If we get a QR code, display it
+        if (qr) {
+            console.log('\n' + '='.repeat(60));
+            console.log('📱 TRAGICAL BOT - WhatsApp Authentication Required');
+            console.log('='.repeat(60));
+            console.log('\n🔹 SCAN THIS QR CODE WITH YOUR WHATSAPP:\n');
+            console.log('1. Open WhatsApp on your phone');
+            console.log('2. Tap Menu (3 dots) or Settings');
+            console.log('3. Go to "Linked Devices"');
+            console.log('4. Tap "Link a Device"');
+            console.log('5. Scan this QR code:\n');
+            
+            // Generate QR code
+            qrcode.generate(qr, { small: true });
+            
+            console.log('\n' + '='.repeat(60));
+            console.log('⏳ Waiting for scan... (QR expires in 60 seconds)');
+            console.log('='.repeat(60) + '\n');
+        }
+        
+        if (connection === 'open') {
+            console.clear();
+            console.log('\n' + '='.repeat(60));
+            log('SUCCESS', '✅ Bot connected to WhatsApp successfully!');
+            console.log(`🤖 Bot JID: ${sock.user?.id}`);
+            console.log(`📱 Bot Number: ${sock.user?.id.split(':')[0]}@s.whatsapp.net`);
+            console.log('='.repeat(60) + '\n');
+        }
+        
+        if (connection === 'close') {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const errorMessage = lastDisconnect?.error?.message || '';
+            
+            console.log('❌ Connection closed:', errorMessage || 'Unknown error');
+            
+            // Check if it's a logout
+            if (statusCode === 401 || errorMessage.includes('logged out')) {
+                log('ERROR', '❌ Bot was logged out. Delete auth folder and restart.');
+                console.log('\n💡 Run: rm -rf auth/ && npm run dev\n');
+                process.exit(1);
+            }
+            
+            // Check for other errors
+            if (errorMessage.includes('networking')) {
+                log('WARN', '🌐 Network error, reconnecting in 10 seconds...');
+                setTimeout(startBot, 10000);
+            } else {
+                log('WARN', '🔄 Connection closed, reconnecting in 5 seconds...');
+                setTimeout(startBot, 5000);
+            }
+        }
+    });
+
+    // Save credentials
+    sock.ev.on('creds.update', saveCreds);
+
+    // Handle messages
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        // Only process new messages
+        if (type !== 'notify') return;
+        
+        const msg = messages[0];
+        if (!msg.message) return;
+        
+        const from = msg.key.remoteJid;
+        const sender = msg.key.participant || from;
+        const isGroup = from.endsWith('@g.us');
+        const text = msg.message.conversation || 
+                     msg.message.extendedTextMessage?.text || 
+                     msg.message.imageMessage?.caption || 
+                     '';
+
+        if (!text) return;
+
+        // Log message
+        console.log(`📨 ${isGroup ? '[GROUP]' : '[DM]'} ${sender.split('@')[0]}: ${text.substring(0, 50)}`);
+
+        // Find or create user
+        let user = await User.findOne({ jid: sender });
+        if (!user) {
+            user = new User({
+                jid: sender,
+                number: sender.split('@')[0],
+                name: msg.pushName || 'Unknown'
+            });
+            await user.save();
+            log('INFO', `👤 New user registered: ${user.number}`);
+        }
+
+        // Update user stats
+        user.lastActive = Date.now();
+        user.usageCount += 1;
+        await user.save();
+
+        // Handle commands
+        if (text.startsWith(process.env.PREFIX)) {
+            const args = text.slice(1).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
+            
+            log('INFO', `⚡ Command: ${command} from ${user.number}`);
+
+            switch(command) {
+                case 'ping':
+                    const start = Date.now();
+                    await sock.sendMessage(from, { text: '🏓 Pong!' });
+                    const end = Date.now();
+                    await sock.sendMessage(from, { text: `⏱️ Response: ${end - start}ms` });
+                    break;
+
+                case 'menu':
+                    const menuText = `╭── 🤖 *TRAGICAL BOT* ──╮
+│ 📱 Status: ${user.paired ? '✅ Paired' : '❌ Unpaired'}
+│ 👑 Role: ${user.role}
+│
+│ 📋 *Available Commands:*
+│
+│ 🔰 *Public Commands*
+│ /menu - Show this menu
+│ /info - Your information
+│ /play <song> - Search music
+│ /pair - Get pairing code
+│ /ping - Check bot response
+│
+│ 🔒 *Paired Commands*
+│ (Coming soon)
+│
+│ 👑 *Owner Commands*
+│ (Coming soon)
+╰──────────────╯
+
+🌐 *Official Group:* (Coming soon)`;
+                    
+                    await sock.sendMessage(from, { text: menuText });
+                    break;
+
+                case 'info':
+                    const infoText = `📊 *YOUR INFORMATION*
+                    
+👤 *Name:* ${user.name}
+📱 *Number:* ${user.number}
+🔗 *Paired:* ${user.paired ? '✅ Yes' : '❌ No'}
+👑 *Role:* ${user.role}
+📊 *Commands Used:* ${user.usageCount}
+⏰ *Last Active:* ${new Date(user.lastActive).toLocaleString()}
+📅 *Joined:* ${new Date(user.createdAt).toLocaleDateString()}`;
+                    
+                    await sock.sendMessage(from, { text: infoText });
+                    break;
+
+                case 'play':
+                    if (!args.length) {
+                        await sock.sendMessage(from, { text: '❌ Usage: /play <song name>' });
+                        return;
+                    }
+                    const query = args.join(' ');
+                    await sock.sendMessage(from, { text: `🔍 Searching for: "${query}"...` });
+                    // We'll implement this later
+                    break;
+
+                case 'pair':
+                    if (user.paired) {
+                        await sock.sendMessage(from, { text: '✅ You are already paired!' });
+                        return;
+                    }
+                    await sock.sendMessage(from, { text: '🔐 Pairing system coming soon!' });
+                    break;
+
+                default:
+                    await sock.sendMessage(from, { text: '❓ Unknown command. Try /menu' });
+            }
+        }
+    });
+
+    return sock;
+}
+
+// Start the bot with error handling
+startBot().catch(error => {
+    log('ERROR', `💥 Fatal error: ${error.message}`);
+    console.error(error);
+    process.exit(1);
+});
