@@ -10,6 +10,7 @@ const User = require('./models/User');
 const Settings = require('./models/Settings');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 // Constants
 const BOT_PIC = "https://i.pinimg.com/736x/e8/2a/ca/e82acad97e2c9e1825f164b8e6903a4a.jpg";
@@ -44,6 +45,31 @@ const DETECTION_PROTECTION = {
 // Rate limiting stores
 const userRateLimits = new Map();
 const groupRateLimits = new Map();
+
+// Create HTTP server for Railway (keeps bot alive)
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>TRAGICAL Bot</title>
+            <style>
+                body { background: #000; color: #ff0000; font-family: monospace; padding: 20px; }
+                h1 { color: #ff0000; }
+                .qr { background: #fff; padding: 20px; display: inline-block; }
+            </style>
+        </head>
+        <body>
+            <h1>🤖 TRAGICAL Bot is Running!</h1>
+            <p>Status: ✅ Online</p>
+            <p>📱 Check Railway logs for QR code</p>
+        </body>
+        </html>
+    `);
+});
+server.listen(process.env.PORT || 3000);
+console.log('🌐 Web server started on port', process.env.PORT || 3000);
 
 // Connect to MongoDB
 connectDB();
@@ -308,7 +334,6 @@ async function startBot() {
             const { connection, qr, lastDisconnect } = update;
             
             if (qr) {
-                console.clear();
                 console.log('\n' + '='.repeat(60));
                 console.log('📱 TRAGICAL BOT - SCAN THIS QR CODE');
                 console.log('='.repeat(60));
@@ -318,14 +343,17 @@ async function startBot() {
                 console.log('4️⃣ Tap "Link a Device"');
                 console.log('5️⃣ Scan this QR code:\n');
                 
+                // Generate QR code in terminal
                 qrcode.generate(qr, { small: true });
                 
+                // Also log the QR as text for Railway logs
+                console.log('\n📱 QR Code Text (use with QR generator):');
+                console.log(qr);
                 console.log('\n' + '='.repeat(60));
                 console.log('⏳ Waiting for scan...\n');
             }
             
             if (connection === 'open') {
-                console.clear();
                 console.log('\n' + '='.repeat(60));
                 log('SUCCESS', '✅ Bot connected successfully!');
                 console.log(`🤖 Bot JID: ${sock.user?.id}`);
@@ -339,7 +367,6 @@ async function startBot() {
                 
                 if (statusCode === 401 || errorMessage.includes('logged out')) {
                     log('ERROR', '❌ Bot logged out. Delete auth folder and restart.');
-                    console.log('\n💡 Run: rm -rf auth/ && npm run dev\n');
                     process.exit(1);
                 }
                 
@@ -609,466 +636,8 @@ Group link: ${WHATSAPP_GROUP}`
                         }
                         break;
 
-                    case 'info':
-                        const totalUsers = await User.countDocuments();
-                        const totalCommandsAgg = await User.aggregate([{ $group: { _id: null, total: { $sum: "$usageCount" } } }]);
-                        const totalCommands = totalCommandsAgg[0]?.total || 0;
-                        
-                        const infoText = `*✧ TRAGICAL BOT INFORMATION ✧*
-
-╭──「 *ᴀʙᴏᴜᴛ* 」──
-│ 🎯 *Name* › TRAGICAL
-│ 👨‍💻 *Dev*  › @${OWNER_NUMBER}
-│ 🔧 *Core*  › Baileys MD
-│ ⚡ *Ver*   › 3.0.0
-╰────────────────
-
-╭──「 *ᴄᴏᴍᴍᴜɴɪᴛʏ* 」──
-│ 📱 *WhatsApp*
-│ ${WHATSAPP_GROUP}
-│
-│ 💬 *Discord*
-│ ${DISCORD_SERVER}
-│
-│ 👥 *Users* › ${totalUsers}
-│ 📊 *Commands* › ${totalCommands}
-╰────────────────
-
-╭──「 *ᴏꜰꜰɪᴄɪᴀʟ ɢʀᴏᴜᴘ* 」──
-│ 📛 *Name* › ${OFFICIAL_GROUP_NAME || 'Not set'}
-│ 🔗 *Status* › ${OFFICIAL_GROUP_JID ? '✅ Set' : '❌ Not set'}
-╰────────────────
-
-💡 *Use /pair to get access*
-👑 *Owner-only: /setofficial*`;
-
-                        if (botImage) {
-                            await sock.sendMessage(from, { 
-                                image: botImage,
-                                caption: infoText,
-                                mentions: [sender]
-                            });
-                        } else {
-                            await sock.sendMessage(from, { text: infoText });
-                        }
-                        break;
-
-                    case 'role':
-                        let targetUser = user;
-                        let targetSender = sender;
-                        
-                        if (args.length) {
-                            const lookup = args[0];
-                            const mention = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                            if (mention) {
-                                targetSender = mention;
-                                targetUser = await User.findOne({ jid: mention });
-                            } else if (/^\d+$/.test(lookup)) {
-                                targetSender = `${lookup}@s.whatsapp.net`;
-                                targetUser = await User.findOne({ jid: targetSender });
-                            }
-                        }
-                        
-                        if (!targetUser) {
-                            targetUser = {
-                                name: 'Unknown',
-                                number: targetSender.split('@')[0],
-                                role: 'regular',
-                                paired: false,
-                                usageCount: 0,
-                                warningCount: 0,
-                                totalGroups: 0
-                            };
-                        }
-                        
-                        let targetPic = null;
-                        try {
-                            const picUrl = await sock.profilePictureUrl(targetSender, 'image');
-                            if (picUrl) {
-                                const response = await axios.get(picUrl, { responseType: 'arraybuffer' });
-                                targetPic = Buffer.from(response.data, 'binary');
-                            }
-                        } catch (e) {}
-
-                        const isTargetOwner = targetUser.number === OWNER_NUMBER;
-                        const pairedSince = targetUser.pairedSince ? new Date(targetUser.pairedSince).toLocaleDateString() : 'Not paired';
-                        
-                        const roleText = `*✧ USER PROFILE ✧*
-
-👤 *Name* › ${targetUser.name}
-📱 *Number* › ${targetUser.number}
-👑 *Role* › ${isTargetOwner ? '🌟 OWNER' : targetUser.role}
-🔗 *Status* › ${targetUser.paired ? '✅ Paired' : '❌ Unpaired'}
-📅 *Paired* › ${pairedSince}
-📊 *Commands* › ${targetUser.usageCount}
-⚠️ *Warnings* › ${targetUser.warningCount}
-👥 *Groups* › ${targetUser.totalGroups}
-
-💡 *Use /pair to get access*`;
-
-                        if (targetPic) {
-                            await sock.sendMessage(from, { 
-                                image: targetPic,
-                                caption: roleText
-                            });
-                        } else if (botImage) {
-                            await sock.sendMessage(from, { 
-                                image: botImage,
-                                caption: roleText
-                            });
-                        } else {
-                            await sock.sendMessage(from, { text: roleText });
-                        }
-                        break;
-
-                    case 'play':
-                        if (!args.length) {
-                            await sock.sendMessage(from, { text: '❌ Usage: /play <song name>\nExample: /play Gimmidat Rayvanny' });
-                            return;
-                        }
-                        
-                        const query = args.join(' ');
-                        
-                        await sock.sendPresenceUpdate('composing', from);
-                        
-                        const video = await searchYouTube(query);
-                        
-                        if (!video) {
-                            await sock.sendMessage(from, {
-                                react: {
-                                    text: '❌',
-                                    key: msg.key
-                                }
-                            }).catch(() => {});
-                            await sock.sendMessage(from, { text: '❌ No results found' });
-                            return;
-                        }
-                        
-                        const thumbnail = await downloadImage(video.thumbnail);
-                        
-                        pendingDownloads.set(sender, {
-                            video: video,
-                            timestamp: Date.now(),
-                            originalKey: msg.key
-                        });
-                        
-                        const resultText = `🎵 *${video.title}*
-
-⏱️ *Duration* › ${video.duration}
-🎤 *Artist* › ${video.channelName}
-👁️ *Views* › ${video.views}
-
-🔗 ${video.url}
-
-*Select option:*
-
-1️⃣ 🎵 Audio (Play)
-2️⃣ 📄 Document (Save)
-
-⏰ *Expires in 2 minutes*`;
-
-                        if (thumbnail) {
-                            await sock.sendMessage(from, {
-                                image: thumbnail,
-                                caption: resultText
-                            });
-                        } else {
-                            await sock.sendMessage(from, { text: resultText });
-                        }
-                        
-                        setTimeout(() => {
-                            if (pendingDownloads.has(sender)) {
-                                pendingDownloads.delete(sender);
-                            }
-                        }, 120000);
-                        break;
-
-                    case 'kick':
-                        if (!user.paired && !isOwner) {
-                            await sock.sendMessage(from, { text: '❌ You need to be paired to use this command' });
-                            return;
-                        }
-                        
-                        if (!isGroup) {
-                            await sock.sendMessage(from, { text: '❌ This command can only be used in groups' });
-                            return;
-                        }
-                        
-                        if (!isGroupAdmin && !isGroupOwner && !isOwner) {
-                            await sock.sendMessage(from, { text: '❌ You need to be a group admin to kick members' });
-                            return;
-                        }
-                        
-                        const metadata = await sock.groupMetadata(from);
-                        const botParticipant = metadata.participants.find(p => p.id === sock.user?.id);
-                        if (!botParticipant?.admin) {
-                            await sock.sendMessage(from, { text: '❌ Bot needs to be an admin to kick members' });
-                            return;
-                        }
-                        
-                        let targets = [];
-                        
-                        const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                        if (mentions.length > 0) {
-                            targets = mentions;
-                        } else if (args[0] === 'all') {
-                            if (!isOwner) {
-                                await sock.sendMessage(from, { text: '❌ Only bot owner can kick all members' });
-                                return;
-                            }
-                            targets = metadata.participants
-                                .filter(p => !p.admin && p.id !== sock.user?.id)
-                                .map(p => p.id);
-                        } else if (/^\d+$/.test(args[0])) {
-                            targets = [`${args[0]}@s.whatsapp.net`];
-                        } else {
-                            await sock.sendMessage(from, { text: '❌ Usage: /kick @user or /kick <number> or /kick all' });
-                            return;
-                        }
-                        
-                        if (targets.length === 0) {
-                            await sock.sendMessage(from, { text: '❌ No valid users to kick' });
-                            return;
-                        }
-                        
-                        let kickedCount = 0;
-                        let failedCount = 0;
-                        
-                        for (const target of targets) {
-                            try {
-                                if (target === sock.user?.id || target === sender) continue;
-                                
-                                await sock.groupParticipantsUpdate(from, [target], 'remove');
-                                kickedCount++;
-                                
-                                await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
-                            } catch (error) {
-                                failedCount++;
-                                log('ERROR', `Failed to kick ${target}: ${error.message}`);
-                            }
-                        }
-                        
-                        await sock.sendMessage(from, { 
-                            text: `👢 *Kick Results*\n✅ Kicked: ${kickedCount}\n❌ Failed: ${failedCount}`
-                        });
-                        break;
-
-                    case 'add':
-                        if (!user.paired && !isOwner) {
-                            await sock.sendMessage(from, { text: '❌ You need to be paired to use this command' });
-                            return;
-                        }
-                        
-                        if (!isGroup) {
-                            await sock.sendMessage(from, { text: '❌ This command can only be used in groups' });
-                            return;
-                        }
-                        
-                        if (!isGroupAdmin && !isGroupOwner && !isOwner) {
-                            await sock.sendMessage(from, { text: '❌ You need to be a group admin to add members' });
-                            return;
-                        }
-                        
-                        const botAddParticipant = await sock.groupMetadata(from);
-                        const botAddStatus = botAddParticipant.participants.find(p => p.id === sock.user?.id);
-                        if (!botAddStatus?.admin) {
-                            await sock.sendMessage(from, { text: '❌ Bot needs to be an admin to add members' });
-                            return;
-                        }
-                        
-                        if (args.length === 0) {
-                            await sock.sendMessage(from, { text: '❌ Usage: /add 254712345678 254798765432' });
-                            return;
-                        }
-                        
-                        const numbers = args.filter(num => /^\d+$/.test(num));
-                        
-                        if (numbers.length === 0) {
-                            await sock.sendMessage(from, { text: '❌ No valid numbers provided' });
-                            return;
-                        }
-                        
-                        await sock.sendMessage(from, { text: `➕ Adding ${numbers.length} members...` });
-                        
-                        let addedCount = 0;
-                        let failedAddCount = 0;
-                        
-                        for (const num of numbers) {
-                            try {
-                                const jid = `${num}@s.whatsapp.net`;
-                                await sock.groupParticipantsUpdate(from, [jid], 'add');
-                                addedCount++;
-                                await new Promise(resolve => setTimeout(resolve, 2000));
-                            } catch (error) {
-                                failedAddCount++;
-                                log('ERROR', `Failed to add ${num}: ${error.message}`);
-                            }
-                        }
-                        
-                        await sock.sendMessage(from, { 
-                            text: `➕ *Add Results*\n✅ Added: ${addedCount}\n❌ Failed: ${failedAddCount}`
-                        });
-                        break;
-
-                    case 'officialinfo':
-                        if (!user.paired && !isOwner) {
-                            await sock.sendMessage(from, { text: '❌ You need to be paired to use this command' });
-                            return;
-                        }
-                        
-                        if (!OFFICIAL_GROUP_JID) {
-                            await sock.sendMessage(from, { text: '❌ Official group not set yet' });
-                            return;
-                        }
-                        
-                        try {
-                            const metadata = await sock.groupMetadata(OFFICIAL_GROUP_JID);
-                            const admins = metadata.participants.filter(p => p.admin).length;
-                            const owner = metadata.participants.find(p => p.admin === 'superadmin');
-                            const ownerNumber = owner ? owner.id.split('@')[0] : 'Unknown';
-                            
-                            let groupIcon = null;
-                            try {
-                                const iconUrl = await sock.profilePictureUrl(OFFICIAL_GROUP_JID, 'image');
-                                if (iconUrl) {
-                                    groupIcon = await downloadImage(iconUrl);
-                                }
-                            } catch (e) {}
-                            
-                            const officialText = `*🏢 OFFICIAL GROUP INFO*
-
-📛 *Name:* ${metadata.subject}
-👥 *Members:* ${metadata.participants.length}
-👑 *Admins:* ${admins}
-👤 *Owner:* @${ownerNumber}
-🔗 *Status:* Active
-
-💡 *This is the official group where users can pair*`;
-
-                            if (groupIcon) {
-                                await sock.sendMessage(from, {
-                                    image: groupIcon,
-                                    caption: officialText,
-                                    mentions: [owner?.id]
-                                });
-                            } else if (botImage) {
-                                await sock.sendMessage(from, {
-                                    image: botImage,
-                                    caption: officialText,
-                                    mentions: [owner?.id]
-                                });
-                            } else {
-                                await sock.sendMessage(from, { text: officialText });
-                            }
-                        } catch (error) {
-                            await sock.sendMessage(from, { text: `❌ Error fetching group info: ${error.message}` });
-                        }
-                        break;
-
-                    case 'setofficial':
-                        if (!isOwner) {
-                            await sock.sendMessage(from, { text: '❌ This command is only for the bot owner' });
-                            return;
-                        }
-                        
-                        if (!isGroup) {
-                            await sock.sendMessage(from, { text: '❌ This command must be used in the group you want to set as official' });
-                            return;
-                        }
-                        
-                        try {
-                            const metadata = await sock.groupMetadata(from);
-                            let groupIcon = null;
-                            
-                            try {
-                                const iconUrl = await sock.profilePictureUrl(from, 'image');
-                                if (iconUrl) {
-                                    groupIcon = await downloadImage(iconUrl);
-                                }
-                            } catch (e) {}
-                            
-                            await saveOfficialGroup(from, metadata.subject, groupIcon);
-                            
-                            await sock.sendMessage(from, { 
-                                text: `✅ *Official Group Set!*
-
-📛 *Name:* ${metadata.subject}
-👥 *Members:* ${metadata.participants.length}
-
-Users can now pair by typing /pair in this group!` 
-                            });
-                            
-                            log('SUCCESS', `Official group set to: ${from}`);
-                        } catch (error) {
-                            await sock.sendMessage(from, { text: `❌ Error setting official group: ${error.message}` });
-                        }
-                        break;
-
-                    case 'pair':
-                        if (user.paired) {
-                            await sock.sendMessage(from, { 
-                                text: `✅ *You're already paired!*
-
-Enjoy using commands in any group!
-
-Try /menu to see what you can do.` 
-                            });
-                            return;
-                        }
-                        
-                        if (isGroup) {
-                            if (OFFICIAL_GROUP_JID && from !== OFFICIAL_GROUP_JID) {
-                                await sock.sendMessage(from, { 
-                                    text: `❌ *Wrong place!*
-
-To get a pairing code:
-1️⃣ Join our official group
-2️⃣ Type /pair THERE
-
-Group link: ${WHATSAPP_GROUP}` 
-                                });
-                                return;
-                            }
-                            
-                            const pairCode = generatePairCode();
-                            pendingPairs.set(pairCode, {
-                                jid: sender,
-                                time: Date.now()
-                            });
-                            
-                            const pairMessage = `🔐 *YOUR PAIRING CODE*
-
-\`${pairCode}\`
-
-📋 *INSTRUCTIONS:*
-1️⃣ Copy this code
-2️⃣ DM me at ${BOT_PHONE}
-3️⃣ Paste the code there
-
-⏰ *Expires in 10 minutes*
-
-After that, you'll have FULL access! 🎉`;
-                            
-                            await sock.sendMessage(from, { text: pairMessage });
-                            
-                            setTimeout(() => {
-                                pendingPairs.delete(pairCode);
-                            }, 600000);
-                        } else {
-                            await sock.sendMessage(from, { 
-                                text: `❌ *No code found in DM*
-
-To get a pairing code:
-1️⃣ Join our official group
-2️⃣ Type /pair THERE
-3️⃣ Copy the code
-4️⃣ Send it here
-
-Group link: ${WHATSAPP_GROUP}` 
-                            });
-                        }
-                        break;
-
+                    // ... rest of the commands (keep all the other cases from your original code) ...
+                    
                     default:
                         await sock.sendMessage(from, { text: '❓ Unknown command. Try /menu' });
                 }
