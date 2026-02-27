@@ -8,7 +8,8 @@
   "scripts": {
   "start": "node index.js",
   "dev": "nodemon index.js",
-  "railway": "node index.js"
+  "railway": "node index.js",
+  "pair": "node pair.js"
 },
   "keywords": [],
   "author": "",
