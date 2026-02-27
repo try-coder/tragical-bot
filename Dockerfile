@@ -1,12 +1,13 @@
-FROM node:20-slim
+FROM node:18-slim
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
+COPY .npmrc ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies using npm install (not ci)
+RUN npm install
 
 # Copy source code
 COPY . .
