@@ -1,4 +1,4 @@
-// index.js - Main Bot Entry Point (NO SCHEDULE - 24/7 RESPONSIVE)
+// index.js - Main Bot Entry Point (FIXED - No duplicate variables)
 require('dotenv').config();
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
@@ -34,7 +34,7 @@ let OFFICIAL_GROUP_JID = null;
 let OFFICIAL_GROUP_NAME = "TRAGICAL Official";
 let OFFICIAL_GROUP_ICON = null;
 
-// Rate limiting stores (keep this for anti-spam)
+// Rate limiting stores
 const userRateLimits = new Map();
 const groupRateLimits = new Map();
 
@@ -172,7 +172,7 @@ function checkRateLimit(userId, groupId = null) {
     const userKey = `${userId}-${minute}`;
     let userData = userRateLimits.get(userKey) || 0;
     
-    if (userData >= 10) { // Max 10 messages per minute
+    if (userData >= 10) {
         return false;
     }
     
@@ -181,7 +181,7 @@ function checkRateLimit(userId, groupId = null) {
     if (groupId) {
         const groupKey = `${groupId}-${minute}`;
         let groupData = groupRateLimits.get(groupKey) || 0;
-        if (groupData >= 20) { // Max 20 messages per minute in group
+        if (groupData >= 20) {
             return false;
         }
         groupRateLimits.set(groupKey, groupData + 1);
@@ -423,7 +423,7 @@ async function startBot() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Handle messages - NO SCHEDULE, ALWAYS RESPONDS
+        // Handle messages
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             
@@ -441,7 +441,6 @@ async function startBot() {
 
             console.log(`📨 ${isGroup ? '[GROUP]' : '[DM]'} ${sender.split('@')[0]}: ${text.substring(0, 50)}`);
 
-            // Rate limiting (anti-spam only)
             if (!checkRateLimit(sender, isGroup ? from : null)) {
                 console.log('⚠️ Rate limit hit');
                 return;
@@ -459,7 +458,6 @@ async function startBot() {
                 log('INFO', `👤 New user: ${user.number}`);
             }
 
-            // Check if user is owner
             const isOwner = user.number === OWNER_NUMBER;
             
             if (isOwner && !user.paired) {
@@ -473,14 +471,13 @@ async function startBot() {
             user.usageCount += 1;
             await user.save();
 
-            // Get group admin status
             let isGroupAdmin = false;
             let isGroupOwner = false;
             
             if (isGroup) {
                 try {
-                    const metadata = await sock.groupMetadata(from);
-                    const participant = metadata.participants.find(p => p.id === sender);
+                    const groupInfo = await sock.groupMetadata(from);
+                    const participant = groupInfo.participants.find(p => p.id === sender);
                     isGroupAdmin = participant?.admin === 'admin';
                     isGroupOwner = participant?.admin === 'superadmin';
                 } catch (error) {
@@ -543,7 +540,7 @@ async function startBot() {
                 return;
             }
 
-            // Handle user pairing (for bot users, not bot connection)
+            // Handle user pairing
             if (!isGroup && /^\d{8}$/.test(text)) {
                 const code = text;
                 const pairData = pendingPairs.get(code);
@@ -581,14 +578,13 @@ async function startBot() {
                 return;
             }
 
-            // Handle commands - ALL COMMANDS HERE
+            // Handle commands
             if (text.startsWith(process.env.PREFIX)) {
                 const args = text.slice(1).trim().split(/ +/);
                 const command = args.shift().toLowerCase();
                 
                 log('INFO', `⚡ Command: ${command} from ${user.number}`);
 
-                // React to command
                 let reaction = '🤖';
                 switch(command) {
                     case 'play': reaction = '⏳'; break;
@@ -792,9 +788,9 @@ async function startBot() {
                             return;
                         }
                         
-                        const metadata = await sock.groupMetadata(from);
-                        const botParticipant = metadata.participants.find(p => p.id === sock.user?.id);
-                        if (!botParticipant?.admin) {
+                        const groupData = await sock.groupMetadata(from);
+                        const botStatus = groupData.participants.find(p => p.id === sock.user?.id);
+                        if (!botStatus?.admin) {
                             await sock.sendMessage(from, { text: '❌ Bot needs to be admin' });
                             return;
                         }
@@ -834,6 +830,13 @@ async function startBot() {
                             return;
                         }
                         
+                        const addGroupInfo = await sock.groupMetadata(from);
+                        const addBotStatus = addGroupInfo.participants.find(p => p.id === sock.user?.id);
+                        if (!addBotStatus?.admin) {
+                            await sock.sendMessage(from, { text: '❌ Bot needs to be admin' });
+                            return;
+                        }
+                        
                         const numbers = args.filter(num => /^\d+$/.test(num));
                         if (!numbers.length) {
                             await sock.sendMessage(from, { text: '❌ Usage: /add 254712345678' });
@@ -865,9 +868,9 @@ async function startBot() {
                         }
                         
                         try {
-                            const metadata = await sock.groupMetadata(OFFICIAL_GROUP_JID);
+                            const officialGroupData = await sock.groupMetadata(OFFICIAL_GROUP_JID);
                             await sock.sendMessage(from, { 
-                                text: `🏢 *Official Group*\n📛 ${metadata.subject}\n👥 ${metadata.participants.length} members`
+                                text: `🏢 *Official Group*\n📛 ${officialGroupData.subject}\n👥 ${officialGroupData.participants.length} members`
                             });
                         } catch (error) {
                             await sock.sendMessage(from, { text: '❌ Error fetching group info' });
@@ -885,10 +888,10 @@ async function startBot() {
                             return;
                         }
                         
-                        const metadata = await sock.groupMetadata(from);
-                        await saveOfficialGroup(from, metadata.subject);
+                        const officialGroupMetadata = await sock.groupMetadata(from);
+                        await saveOfficialGroup(from, officialGroupMetadata.subject);
                         await sock.sendMessage(from, { 
-                            text: `✅ Official group set to: ${metadata.subject}`
+                            text: `✅ Official group set to: ${officialGroupMetadata.subject}`
                         });
                         break;
 
