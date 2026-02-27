@@ -1,4 +1,4 @@
-// index.js - Main Bot Entry Point (FIXED - No duplicate variables)
+// index.js - Main Bot Entry Point (QR CODE WORKING)
 require('dotenv').config();
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
@@ -116,7 +116,34 @@ const server = http.createServer((req, res) => {
                 <div class="container">
                     <h1>🤖 TRAGICAL Bot</h1>
                     <div class="status">✅ BOT IS RUNNING 24/7</div>
-                    <p>Bot is active and responding to commands!</p>
+                    
+                    <h2>📱 SCAN QR CODE TO CONNECT</h2>
+                    
+                    <div class="qr-box">
+                        <img src="/qr.png" alt="QR Code" style="max-width: 300px;" id="qrImage">
+                    </div>
+                    
+                    <div>
+                        <a href="/qr.png" class="qr-link" download>📥 Download QR</a>
+                        <a href="/qr.txt" class="qr-link" target="_blank">📋 View Text</a>
+                    </div>
+                    
+                    <div style="margin: 20px 0; color: #ccc; text-align: left;">
+                        <h3>📋 Instructions:</h3>
+                        <ol style="line-height: 2;">
+                            <li>Open WhatsApp on your phone</li>
+                            <li>Go to Linked Devices</li>
+                            <li>Tap "Link a Device"</li>
+                            <li>Scan the QR code above</li>
+                        </ol>
+                    </div>
+                    
+                    <script>
+                        // Auto-refresh QR every 30 seconds
+                        setInterval(() => {
+                            document.getElementById('qrImage').src = '/qr.png?' + new Date().getTime();
+                        }, 30000);
+                    </script>
                 </div>
             </body>
             </html>
@@ -164,7 +191,7 @@ function generatePairCode() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
-// Check rate limits (anti-spam)
+// Check rate limits
 function checkRateLimit(userId, groupId = null) {
     const now = Date.now();
     const minute = Math.floor(now / 60000);
@@ -354,9 +381,8 @@ function formatDate(dateString) {
 
 async function startBot() {
     try {
-        log('INFO', '🚀 Starting TRAGICAL Bot (24/7 Mode)...');
+        log('INFO', '🚀 Starting TRAGICAL Bot...');
         
-        // Load official group
         await loadOfficialGroup();
 
         const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -373,12 +399,9 @@ async function startBot() {
             version,
             logger: Pino({ level: 'silent' }),
             auth: state,
-            browser: ['TRAGICAL', 'Chrome', '3.0.0'],
-            syncFullHistory: false,
-            markOnlineOnConnect: true
+            browser: ['TRAGICAL', 'Chrome', '3.0.0']
         });
 
-        // Handle connection updates
         sock.ev.on('connection.update', async (update) => {
             const { connection, qr, lastDisconnect } = update;
             
@@ -388,17 +411,24 @@ async function startBot() {
                 console.log('='.repeat(60));
                 
                 // Save QR as image
-                const qrPath = path.join(publicDir, 'qrcode.png');
-                await QRCode.toFile(qrPath, qr, {
-                    color: { dark: '#000000', light: '#ffffff' },
-                    width: 400
-                });
+                try {
+                    const qrPath = path.join(publicDir, 'qrcode.png');
+                    await QRCode.toFile(qrPath, qr, {
+                        color: { dark: '#000000', light: '#ffffff' },
+                        width: 400
+                    });
+                    
+                    // Save QR as text
+                    fs.writeFileSync('qrcode.txt', qr);
+                    
+                    const railwayUrl = process.env.RAILWAY_STATIC_URL || `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`;
+                    console.log(`📱 QR Code saved! Open ${railwayUrl} to scan`);
+                } catch (qrError) {
+                    console.log('❌ Failed to save QR:', qrError.message);
+                }
                 
-                // Save QR as text
-                fs.writeFileSync('qrcode.txt', qr);
-                
-                const railwayUrl = process.env.RAILWAY_STATIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-                console.log(`📱 Open ${railwayUrl} to scan QR code`);
+                // Also show in terminal as fallback
+                qrcode.generate(qr, { small: true });
                 console.log('='.repeat(60));
             }
             
@@ -406,7 +436,6 @@ async function startBot() {
                 console.log('\n' + '✅'.repeat(20));
                 console.log('✅ Bot connected successfully!');
                 console.log(`🤖 Bot JID: ${sock.user?.id}`);
-                console.log('✅ Bot is now responding to commands 24/7');
                 console.log('✅'.repeat(20) + '\n');
             }
             
@@ -423,7 +452,6 @@ async function startBot() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Handle messages
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             
@@ -446,7 +474,6 @@ async function startBot() {
                 return;
             }
 
-            // Find or create user
             let user = await User.findOne({ jid: sender });
             if (!user) {
                 user = new User({
@@ -476,8 +503,8 @@ async function startBot() {
             
             if (isGroup) {
                 try {
-                    const groupInfo = await sock.groupMetadata(from);
-                    const participant = groupInfo.participants.find(p => p.id === sender);
+                    const groupMetadata = await sock.groupMetadata(from);
+                    const participant = groupMetadata.participants.find(p => p.id === sender);
                     isGroupAdmin = participant?.admin === 'admin';
                     isGroupOwner = participant?.admin === 'superadmin';
                 } catch (error) {
@@ -788,9 +815,9 @@ async function startBot() {
                             return;
                         }
                         
-                        const groupData = await sock.groupMetadata(from);
-                        const botStatus = groupData.participants.find(p => p.id === sock.user?.id);
-                        if (!botStatus?.admin) {
+                        const groupInfo = await sock.groupMetadata(from);
+                        const botInGroup = groupInfo.participants.find(p => p.id === sock.user?.id);
+                        if (!botInGroup?.admin) {
                             await sock.sendMessage(from, { text: '❌ Bot needs to be admin' });
                             return;
                         }
@@ -830,9 +857,9 @@ async function startBot() {
                             return;
                         }
                         
-                        const addGroupInfo = await sock.groupMetadata(from);
-                        const addBotStatus = addGroupInfo.participants.find(p => p.id === sock.user?.id);
-                        if (!addBotStatus?.admin) {
+                        const addGroup = await sock.groupMetadata(from);
+                        const botInAddGroup = addGroup.participants.find(p => p.id === sock.user?.id);
+                        if (!botInAddGroup?.admin) {
                             await sock.sendMessage(from, { text: '❌ Bot needs to be admin' });
                             return;
                         }
@@ -868,9 +895,9 @@ async function startBot() {
                         }
                         
                         try {
-                            const officialGroupData = await sock.groupMetadata(OFFICIAL_GROUP_JID);
+                            const officialGroup = await sock.groupMetadata(OFFICIAL_GROUP_JID);
                             await sock.sendMessage(from, { 
-                                text: `🏢 *Official Group*\n📛 ${officialGroupData.subject}\n👥 ${officialGroupData.participants.length} members`
+                                text: `🏢 *Official Group*\n📛 ${officialGroup.subject}\n👥 ${officialGroup.participants.length} members`
                             });
                         } catch (error) {
                             await sock.sendMessage(from, { text: '❌ Error fetching group info' });
@@ -888,10 +915,10 @@ async function startBot() {
                             return;
                         }
                         
-                        const officialGroupMetadata = await sock.groupMetadata(from);
-                        await saveOfficialGroup(from, officialGroupMetadata.subject);
+                        const officialMeta = await sock.groupMetadata(from);
+                        await saveOfficialGroup(from, officialMeta.subject);
                         await sock.sendMessage(from, { 
-                            text: `✅ Official group set to: ${officialGroupMetadata.subject}`
+                            text: `✅ Official group set to: ${officialMeta.subject}`
                         });
                         break;
 
