@@ -307,10 +307,10 @@ async function startBot() {
         log('INFO', `📱 Using WA v${version.join('.')}, isLatest: ${isLatest}`);
 
         const authFolder = process.env.SESSION_FOLDER || 'auth';
-        if (!fs.existsSync(authFolder)) {
-            fs.mkdirSync(authFolder, { recursive: true });
-        }
-
+        
+        // Check if we already have a session
+        const hasSession = fs.existsSync(path.join(authFolder, 'creds.json'));
+        
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
         
         const browsers = [
@@ -329,19 +329,22 @@ async function startBot() {
             markOnlineOnConnect: false
         });
 
+        let pairingCodeShown = false;
+
         // Handle connection updates - WITH 8-DIGIT PAIRING
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             
-            // Check if we need to pair (not registered yet)
-            if (!sock.authState.creds.registered) {
+            // Check if we need to pair (not registered yet and no session)
+            if (!sock.authState.creds.registered && !hasSession && !pairingCodeShown) {
                 // If phone number is set in env, use 8-digit pairing code
                 if (process.env.PHONE_NUMBER) {
                     try {
+                        pairingCodeShown = true;
                         // Request 8-digit pairing code
                         const pairingCode = await sock.requestPairingCode(process.env.PHONE_NUMBER);
                         
-                        // Format code as 4-4 digits for easier reading
+                        // Format code for easier reading
                         const formattedCode = pairingCode.match(/.{1,4}/g).join(' ');
                         
                         console.log('\n' + '🔴'.repeat(40));
@@ -356,12 +359,13 @@ async function startBot() {
                         console.log('5. Code expires in 60 seconds\n');
                         
                         // Also log the raw code
-                        console.log('Raw code (if formatting issues):', pairingCode);
+                        console.log('Raw code:', pairingCode);
+                        
+                        // Don't reconnect immediately - wait for user to enter code
+                        console.log('⏳ Waiting 60 seconds for you to enter the code...');
                         
                     } catch (error) {
                         console.log('❌ Failed to get pairing code:', error.message);
-                        console.log('Falling back to QR code...');
-                        // QR would be here but we're not using it
                     }
                 }
             }
@@ -376,6 +380,17 @@ async function startBot() {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const errorMessage = lastDisconnect?.error?.message || '';
+                
+                // If we're not registered yet and showed the code, wait longer
+                if (!sock.authState.creds.registered && pairingCodeShown) {
+                    console.log('⏳ Still waiting for you to enter the pairing code...');
+                    console.log('📱 Check the code above and enter it in WhatsApp');
+                    console.log('🔄 Will retry in 30 seconds...');
+                    
+                    // Don't treat as logout, just wait and retry
+                    setTimeout(startBot, 30000);
+                    return;
+                }
                 
                 if (statusCode === 401 || errorMessage.includes('logged out')) {
                     log('ERROR', '❌ Bot logged out. Delete auth folder and restart.');
