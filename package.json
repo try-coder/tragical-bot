@@ -2,15 +2,15 @@
   "name": "tragical-bot",
   "version": "1.0.0",
   "engines": {
-  "node": ">=20.0.0",
-  "npm": ">=10.0.0"
-},
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
   "scripts": {
-  "start": "node index.js",
-  "dev": "nodemon index.js",
-  "railway": "node index.js",
-  "pair": "node pair.js"
-},
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "railway": "node index.js",
+    "pair": "node pair.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -22,6 +22,7 @@
     "dotenv": "^17.3.1",
     "mongoose": "^9.2.2",
     "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
