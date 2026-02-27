@@ -1,6 +1,6 @@
-// index.js - Main Bot Entry Point (ALL FIXES APPLIED)
+// index.js - Main Bot Entry Point (COMPLETE FIXED VERSION)
 require('dotenv').config();
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -12,6 +12,7 @@ const Settings = require('./models/Settings');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const ytdl = require('ytdl-core');
 
 // Constants
 const BOT_PIC = "https://i.pinimg.com/736x/e8/2a/ca/e82acad97e2c9e1825f164b8e6903a4a.jpg";
@@ -22,12 +23,15 @@ const BOT_PHONE = "254787031145";
 
 // YouTube API Key
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST;
 
 // Store pending downloads and pairs
 const pendingDownloads = new Map();
 const pendingPairs = new Map();
+
+// Group settings
+const antilinkGroups = new Set();
+const antispamGroups = new Set();
+const userWarnings = new Map(); // userId -> { count, lastWarn }
 
 // Official group JID
 let OFFICIAL_GROUP_JID = null;
@@ -307,41 +311,44 @@ async function searchYouTube(query) {
     }
 }
 
-// FIXED: Download using RapidAPI with better error handling
-async function downloadViaAPI(videoId) {
+// FIXED: Download using ytdl-core (more reliable than RapidAPI)
+async function downloadViaYTDL(videoId) {
     try {
-        const options = {
-            method: 'GET',
-            url: 'https://youtube-mp36.p.rapidapi.com/dl',
-            params: { id: videoId },
-            headers: {
-                'X-RapidAPI-Key': RAPIDAPI_KEY,
-                'X-RapidAPI-Host': RAPIDAPI_HOST
-            },
-            timeout: 30000
-        };
-
-        const response = await axios.request(options);
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+        console.log('🎵 Downloading with ytdl:', url);
         
-        if (response.data && response.data.status === 'ok' && response.data.link) {
-            // Download the actual file
-            const fileResponse = await axios.get(response.data.link, { 
-                responseType: 'arraybuffer',
-                timeout: 60000
+        const info = await ytdl.getInfo(url);
+        const title = info.videoDetails.title;
+        
+        // Get audio stream
+        const stream = ytdl(url, {
+            quality: 'highestaudio',
+            filter: 'audioonly'
+        });
+        
+        const chunks = [];
+        
+        return new Promise((resolve, reject) => {
+            stream.on('data', chunk => chunks.push(chunk));
+            stream.on('end', () => {
+                const buffer = Buffer.concat(chunks);
+                const filename = `${title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
+                console.log('✅ Download complete:', filename);
+                resolve({
+                    success: true,
+                    buffer: buffer,
+                    filename: filename,
+                    title: title
+                });
             });
-            
-            const filename = `${response.data.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
-            
-            return {
-                buffer: Buffer.from(fileResponse.data),
-                filename: filename,
-                title: response.data.title,
-                success: true
-            };
-        }
-        return { success: false, error: 'No download link' };
+            stream.on('error', (error) => {
+                console.error('❌ Stream error:', error);
+                reject(error);
+            });
+        });
     } catch (error) {
-        log('ERROR', `API download error: ${error.message}`);
+        console.error('❌ ytdl error:', error.message);
+        log('ERROR', `ytdl download error: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
@@ -378,6 +385,41 @@ function formatDate(dateString) {
     if (diffDays < 30) return `${diffDays} days ago`;
     if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
     return `${Math.floor(diffDays / 365)} years ago`;
+}
+
+// NEW: Function to download view-once media
+async function downloadViewOnceMessage(msg) {
+    try {
+        const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+        if (!contextInfo?.quotedMessage) return null;
+        
+        const quotedMsg = contextInfo.quotedMessage;
+        let mediaType, stream;
+        
+        if (quotedMsg.imageMessage) {
+            mediaType = 'image';
+            stream = await downloadContentFromMessage(quotedMsg.imageMessage, 'image');
+        } else if (quotedMsg.videoMessage) {
+            mediaType = 'video';
+            stream = await downloadContentFromMessage(quotedMsg.videoMessage, 'video');
+        } else {
+            return null;
+        }
+        
+        let buffer = Buffer.from([]);
+        for await (const chunk of stream) {
+            buffer = Buffer.concat([buffer, chunk]);
+        }
+        
+        return {
+            buffer,
+            type: mediaType,
+            caption: quotedMsg.imageMessage?.caption || quotedMsg.videoMessage?.caption || ''
+        };
+    } catch (error) {
+        log('ERROR', `Failed to download view-once: ${error.message}`);
+        return null;
+    }
 }
 
 async function startBot() {
@@ -508,7 +550,33 @@ async function startBot() {
                 }
             }
 
-            // FIXED: Handle download responses with better error handling
+            // NEW: Handle .cc command for view-once messages
+            if (text === '.cc' && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+                if (!user.paired && !isOwner) {
+                    await sock.sendMessage(from, { text: '❌ You need to be paired to use this command' });
+                    return;
+                }
+                
+                const media = await downloadViewOnceMessage(msg);
+                if (media) {
+                    if (media.type === 'image') {
+                        await sock.sendMessage(from, {
+                            image: media.buffer,
+                            caption: media.caption || '📸 View once media recovered'
+                        });
+                    } else if (media.type === 'video') {
+                        await sock.sendMessage(from, {
+                            video: media.buffer,
+                            caption: media.caption || '🎥 View once media recovered'
+                        });
+                    }
+                } else {
+                    await sock.sendMessage(from, { text: '❌ Could not recover media' });
+                }
+                return;
+            }
+
+            // Handle download responses
             if (pendingDownloads.has(sender) && /^[12]$/.test(text)) {
                 const downloadData = pendingDownloads.get(sender);
                 const choice = parseInt(text);
@@ -522,7 +590,7 @@ async function startBot() {
                     }).catch(() => {});
                 }
                 
-                const result = await downloadViaAPI(downloadData.video.videoId);
+                const result = await downloadViaYTDL(downloadData.video.videoId);
                 
                 if (result.success && result.buffer) {
                     if (choice === 1) {
@@ -581,7 +649,7 @@ async function startBot() {
                 return;
             }
 
-            // FIXED: Handle user pairing (works for all users now)
+            // Handle user pairing
             if (!isGroup && /^\d{8}$/.test(text)) {
                 const code = text;
                 const pairData = pendingPairs.get(code);
@@ -639,6 +707,8 @@ async function startBot() {
                     case 'add': reaction = '➕'; break;
                     case 'officialinfo': reaction = '🏢'; break;
                     case 'setofficial': reaction = '⚙️'; break;
+                    case 'antilink': reaction = '🔗'; break;
+                    case 'antispam': reaction = '🚫'; break;
                 }
                 
                 await sock.sendMessage(from, {
@@ -673,11 +743,14 @@ async function startBot() {
 │  🎵 /play     - Search music
 │  🔐 /pair     - Get pairing code
 │  🏓 /ping     - Check response
+│  📸 .cc       - Recover view once
 │                            
 │  ✦ *PAIRED COMMANDS* ✦
 │  👢 /kick     - Kick user
 │  ➕ /add      - Add members
 │  🏢 /officialinfo - Group info
+│  🔗 /antilink - Toggle anti-link
+│  🚫 /antispam - Toggle anti-spam
 │                            
 │  ✦ *OWNER COMMANDS* ✦
 │  ⚙️ /setofficial - Set official group
@@ -704,7 +777,14 @@ async function startBot() {
 📱 Status: 24/7 Online
 
 📱 WhatsApp: ${WHATSAPP_GROUP}
-💬 Discord: ${DISCORD_SERVER}`;
+💬 Discord: ${DISCORD_SERVER}
+
+✨ Features:
+• YouTube Downloads
+• View Once Recovery
+• Anti-Link Protection
+• Anti-Spam System
+• Group Moderation`;
 
                         if (botImage) {
                             await sock.sendMessage(from, { 
@@ -717,7 +797,6 @@ async function startBot() {
                         }
                         break;
 
-                    // FIXED: /role now works with mentions and numbers
                     case 'role':
                         let targetUser = user;
                         let targetSender = sender;
@@ -726,13 +805,11 @@ async function startBot() {
                         if (args.length) {
                             const lookup = args[0];
                             
-                            // Check if it's a mention
                             if (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
                                 targetSender = msg.message.extendedTextMessage.contextInfo.mentionedJid[0];
                                 targetUser = await User.findOne({ jid: targetSender });
                                 targetName = targetSender.split('@')[0];
                             } 
-                            // Check if it's a phone number
                             else if (/^\d+$/.test(lookup) && lookup.length >= 10) {
                                 targetSender = `${lookup}@s.whatsapp.net`;
                                 targetUser = await User.findOne({ jid: targetSender });
@@ -753,7 +830,6 @@ async function startBot() {
                             };
                         }
                         
-                        // Try to get profile picture
                         let targetPic = null;
                         try {
                             const picUrl = await sock.profilePictureUrl(targetSender, 'image');
@@ -761,9 +837,7 @@ async function startBot() {
                                 const response = await axios.get(picUrl, { responseType: 'arraybuffer', timeout: 5000 });
                                 targetPic = Buffer.from(response.data, 'binary');
                             }
-                        } catch (e) {
-                            // No profile picture
-                        }
+                        } catch (e) {}
                         
                         const isTargetOwner = targetUser.number === OWNER_NUMBER;
                         const pairedSince = targetUser.pairedSince ? new Date(targetUser.pairedSince).toLocaleDateString() : 'Not paired';
@@ -849,6 +923,64 @@ async function startBot() {
                                 pendingDownloads.delete(sender);
                             }
                         }, 120000);
+                        break;
+
+                    // NEW: Anti-Link command
+                    case 'antilink':
+                        if (!user.paired && !isOwner) {
+                            await sock.sendMessage(from, { text: '❌ You need to be paired' });
+                            return;
+                        }
+                        
+                        if (!isGroup) {
+                            await sock.sendMessage(from, { text: '❌ This command only works in groups' });
+                            return;
+                        }
+                        
+                        if (!isGroupAdmin && !isGroupOwner && !isOwner) {
+                            await sock.sendMessage(from, { text: '❌ You need to be a group admin' });
+                            return;
+                        }
+                        
+                        if (args[0] === 'on') {
+                            antilinkGroups.add(from);
+                            await sock.sendMessage(from, { text: '🔗 *Anti-Link Enabled*\n\nLinks will be automatically deleted.' });
+                        } else if (args[0] === 'off') {
+                            antilinkGroups.delete(from);
+                            await sock.sendMessage(from, { text: '🔗 *Anti-Link Disabled*' });
+                        } else {
+                            const status = antilinkGroups.has(from) ? '✅ Enabled' : '❌ Disabled';
+                            await sock.sendMessage(from, { text: `🔗 *Anti-Link Status:* ${status}\n\nUse /antilink on or /antilink off` });
+                        }
+                        break;
+
+                    // NEW: Anti-Spam command
+                    case 'antispam':
+                        if (!user.paired && !isOwner) {
+                            await sock.sendMessage(from, { text: '❌ You need to be paired' });
+                            return;
+                        }
+                        
+                        if (!isGroup) {
+                            await sock.sendMessage(from, { text: '❌ This command only works in groups' });
+                            return;
+                        }
+                        
+                        if (!isGroupAdmin && !isGroupOwner && !isOwner) {
+                            await sock.sendMessage(from, { text: '❌ You need to be a group admin' });
+                            return;
+                        }
+                        
+                        if (args[0] === 'on') {
+                            antispamGroups.add(from);
+                            await sock.sendMessage(from, { text: '🚫 *Anti-Spam Enabled*\n\nSpammers will be warned and kicked.' });
+                        } else if (args[0] === 'off') {
+                            antispamGroups.delete(from);
+                            await sock.sendMessage(from, { text: '🚫 *Anti-Spam Disabled*' });
+                        } else {
+                            const status = antispamGroups.has(from) ? '✅ Enabled' : '❌ Disabled';
+                            await sock.sendMessage(from, { text: `🚫 *Anti-Spam Status:* ${status}\n\nUse /antispam on or /antispam off` });
+                        }
                         break;
 
                     case 'pair':
@@ -980,7 +1112,6 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                         await sock.sendMessage(from, { text: `✅ Added ${added} members` });
                         break;
 
-                    // FIXED: /officialinfo now shows group icon
                     case 'officialinfo':
                         if (!user.paired && !isOwner) {
                             await sock.sendMessage(from, { text: '❌ You need to be paired' });
@@ -998,7 +1129,6 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                             const owner = officialGroup.participants.find(p => p.admin === 'superadmin');
                             const ownerNumber = owner ? owner.id.split('@')[0] : 'Unknown';
                             
-                            // Try to get group icon
                             let groupIcon = null;
                             try {
                                 const iconUrl = await sock.profilePictureUrl(OFFICIAL_GROUP_JID, 'image');
@@ -1058,6 +1188,80 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                         await sock.sendMessage(from, { text: '❓ Unknown command. Try /menu' });
                 }
             }
+
+            // NEW: Auto Anti-Link detection
+            if (isGroup && antilinkGroups.has(from) && !isGroupAdmin && !isGroupOwner && !isOwner) {
+                const linkRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|chat\.whatsapp\.com|t\.me|discord\.gg)/i;
+                if (linkRegex.test(text)) {
+                    try {
+                        await sock.sendMessage(from, {
+                            delete: {
+                                id: msg.key.id,
+                                participant: sender,
+                                remoteJid: from,
+                                fromMe: false
+                            }
+                        });
+                        
+                        // Warning system
+                        const warningKey = `${from}-${sender}`;
+                        const warningData = userWarnings.get(warningKey) || { count: 0, lastWarn: 0 };
+                        
+                        if (Date.now() - warningData.lastWarn > 60000) {
+                            warningData.count = 1;
+                        } else {
+                            warningData.count++;
+                        }
+                        warningData.lastWarn = Date.now();
+                        userWarnings.set(warningKey, warningData);
+                        
+                        if (warningData.count >= 3) {
+                            await sock.groupParticipantsUpdate(from, [sender], 'remove');
+                            await sock.sendMessage(from, { 
+                                text: `👢 @${sender.split('@')[0]} was kicked for posting links after warnings`,
+                                mentions: [sender]
+                            });
+                            userWarnings.delete(warningKey);
+                        } else {
+                            await sock.sendMessage(from, {
+                                text: `⚠️ @${sender.split('@')[0]} No links allowed! Warning ${warningData.count}/3`,
+                                mentions: [sender]
+                            });
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            // NEW: Auto Anti-Spam detection
+            if (isGroup && antispamGroups.has(from) && !isGroupAdmin && !isGroupOwner && !isOwner) {
+                const spamKey = `${from}-${sender}`;
+                const spamData = userWarnings.get(spamKey) || { count: 0, lastMsg: 0 };
+                
+                if (Date.now() - spamData.lastMsg < 2000) {
+                    spamData.count++;
+                    
+                    if (spamData.count >= 5) {
+                        try {
+                            await sock.groupParticipantsUpdate(from, [sender], 'remove');
+                            await sock.sendMessage(from, { 
+                                text: `👢 @${sender.split('@')[0]} was kicked for spamming`,
+                                mentions: [sender]
+                            });
+                            userWarnings.delete(spamKey);
+                        } catch (e) {}
+                    } else if (spamData.count >= 3) {
+                        await sock.sendMessage(from, {
+                            text: `⚠️ @${sender.split('@')[0]} Stop spamming! Warning ${spamData.count-2}/3`,
+                            mentions: [sender]
+                        });
+                    }
+                } else {
+                    spamData.count = 0;
+                }
+                
+                spamData.lastMsg = Date.now();
+                userWarnings.set(spamKey, spamData);
+            }
         });
 
     } catch (error) {
@@ -1066,20 +1270,44 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
     }
 }
 
-// Clean up old pending downloads
+// Clean up old data
 setInterval(() => {
     const now = Date.now();
+    const minute = Math.floor(now / 60000);
+    
+    for (const key of userRateLimits.keys()) {
+        if (!key.includes(`-${minute}`)) {
+            userRateLimits.delete(key);
+        }
+    }
+    for (const key of groupRateLimits.keys()) {
+        if (!key.includes(`-${minute}`)) {
+            groupRateLimits.delete(key);
+        }
+    }
+    
     for (const [user, data] of pendingDownloads.entries()) {
         if (now - data.timestamp > 120000) {
             pendingDownloads.delete(user);
         }
     }
+    
     for (const [code, data] of pendingPairs.entries()) {
         if (now - data.time > 600000) {
             pendingPairs.delete(code);
         }
     }
+    
+    // Clean old warnings
+    for (const [key, data] of userWarnings.entries()) {
+        if (now - data.lastWarn > 3600000) {
+            userWarnings.delete(key);
+        }
+    }
 }, 60000);
+
+// Install required package
+console.log('📦 Make sure to run: npm install ytdl-core');
 
 // Start the bot
 startBot();
