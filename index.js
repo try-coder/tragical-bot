@@ -1,4 +1,4 @@
-// index.js - Main Bot Entry Point (QR CODE WORKING)
+// index.js - Main Bot Entry Point (ALL FIXES APPLIED)
 require('dotenv').config();
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
@@ -139,7 +139,6 @@ const server = http.createServer((req, res) => {
                     </div>
                     
                     <script>
-                        // Auto-refresh QR every 30 seconds
                         setInterval(() => {
                             document.getElementById('qrImage').src = '/qr.png?' + new Date().getTime();
                         }, 30000);
@@ -239,7 +238,7 @@ async function downloadImage(url) {
     try {
         const response = await axios.get(url, { 
             responseType: 'arraybuffer',
-            timeout: 5000,
+            timeout: 10000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -308,7 +307,7 @@ async function searchYouTube(query) {
     }
 }
 
-// Download using RapidAPI
+// FIXED: Download using RapidAPI with better error handling
 async function downloadViaAPI(videoId) {
     try {
         const options = {
@@ -319,12 +318,13 @@ async function downloadViaAPI(videoId) {
                 'X-RapidAPI-Key': RAPIDAPI_KEY,
                 'X-RapidAPI-Host': RAPIDAPI_HOST
             },
-            timeout: 60000
+            timeout: 30000
         };
 
         const response = await axios.request(options);
         
-        if (response.data && response.data.status === 'ok') {
+        if (response.data && response.data.status === 'ok' && response.data.link) {
+            // Download the actual file
             const fileResponse = await axios.get(response.data.link, { 
                 responseType: 'arraybuffer',
                 timeout: 60000
@@ -335,13 +335,14 @@ async function downloadViaAPI(videoId) {
             return {
                 buffer: Buffer.from(fileResponse.data),
                 filename: filename,
-                title: response.data.title
+                title: response.data.title,
+                success: true
             };
         }
-        return null;
+        return { success: false, error: 'No download link' };
     } catch (error) {
         log('ERROR', `API download error: ${error.message}`);
-        return null;
+        return { success: false, error: error.message };
     }
 }
 
@@ -410,24 +411,19 @@ async function startBot() {
                 console.log('📱 NEW QR CODE GENERATED');
                 console.log('='.repeat(60));
                 
-                // Save QR as image
                 try {
                     const qrPath = path.join(publicDir, 'qrcode.png');
                     await QRCode.toFile(qrPath, qr, {
                         color: { dark: '#000000', light: '#ffffff' },
                         width: 400
                     });
-                    
-                    // Save QR as text
                     fs.writeFileSync('qrcode.txt', qr);
-                    
                     const railwayUrl = process.env.RAILWAY_STATIC_URL || `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'}`;
                     console.log(`📱 QR Code saved! Open ${railwayUrl} to scan`);
                 } catch (qrError) {
                     console.log('❌ Failed to save QR:', qrError.message);
                 }
                 
-                // Also show in terminal as fallback
                 qrcode.generate(qr, { small: true });
                 console.log('='.repeat(60));
             }
@@ -512,7 +508,7 @@ async function startBot() {
                 }
             }
 
-            // Handle download responses
+            // FIXED: Handle download responses with better error handling
             if (pendingDownloads.has(sender) && /^[12]$/.test(text)) {
                 const downloadData = pendingDownloads.get(sender);
                 const choice = parseInt(text);
@@ -520,33 +516,51 @@ async function startBot() {
                 if (downloadData.originalKey) {
                     await sock.sendMessage(from, {
                         react: {
-                            text: '🫰',
+                            text: '⏳',
                             key: downloadData.originalKey
                         }
                     }).catch(() => {});
                 }
                 
-                const audioFile = await downloadViaAPI(downloadData.video.videoId);
+                const result = await downloadViaAPI(downloadData.video.videoId);
                 
-                if (audioFile) {
+                if (result.success && result.buffer) {
                     if (choice === 1) {
                         await sock.sendMessage(from, {
-                            audio: audioFile.buffer,
+                            audio: result.buffer,
                             mimetype: 'audio/mpeg',
-                            fileName: audioFile.filename
+                            fileName: result.filename
                         });
                     } else {
                         await sock.sendMessage(from, {
-                            document: audioFile.buffer,
+                            document: result.buffer,
                             mimetype: 'audio/mpeg',
-                            fileName: audioFile.filename,
+                            fileName: result.filename,
                             caption: `📄 ${downloadData.video.title}`
                         });
                     }
+                    
+                    if (downloadData.originalKey) {
+                        await sock.sendMessage(from, {
+                            react: {
+                                text: '✅',
+                                key: downloadData.originalKey
+                            }
+                        }).catch(() => {});
+                    }
                 } else {
                     await sock.sendMessage(from, { 
-                        text: `❌ Download failed\n🔗 ${downloadData.video.url}`
+                        text: `❌ *Download Failed*\n\n🎵 ${downloadData.video.title}\n🔗 ${downloadData.video.url}\n\n💡 Try downloading directly from the link above.`
                     });
+                    
+                    if (downloadData.originalKey) {
+                        await sock.sendMessage(from, {
+                            react: {
+                                text: '❌',
+                                key: downloadData.originalKey
+                            }
+                        }).catch(() => {});
+                    }
                 }
                 
                 pendingDownloads.delete(sender);
@@ -567,7 +581,7 @@ async function startBot() {
                 return;
             }
 
-            // Handle user pairing
+            // FIXED: Handle user pairing (works for all users now)
             if (!isGroup && /^\d{8}$/.test(text)) {
                 const code = text;
                 const pairData = pendingPairs.get(code);
@@ -577,29 +591,30 @@ async function startBot() {
                     
                     if (timeDiff < 600000) {
                         user.paired = true;
+                        user.role = 'regular';
                         user.pairedSince = Date.now();
                         await user.save();
                         
                         pendingPairs.delete(code);
                         
                         await sock.sendMessage(from, { 
-                            text: `✅ *PAIRING SUCCESSFUL!* You can now use all bot commands in ANY group!`
+                            text: `✅ *PAIRING SUCCESSFUL!*\n\nYou can now use all bot commands in ANY group!\n\nTry /menu to see available commands.`
                         });
                         
                         if (OFFICIAL_GROUP_JID) {
                             await sock.sendMessage(OFFICIAL_GROUP_JID, { 
-                                text: `👤 New user paired: ${user.number}`
+                                text: `👤 *New user paired!*\n📱 ${user.number}\n👤 ${user.name || 'Unknown'}`
                             }).catch(() => {});
                         }
                     } else {
                         await sock.sendMessage(from, { 
-                            text: `❌ Code expired! Get a new code by typing /pair in the official group.`
+                            text: `❌ *Code expired!*\n\nGet a new code by typing /pair in the official group.`
                         });
                         pendingPairs.delete(code);
                     }
                 } else {
                     await sock.sendMessage(from, { 
-                        text: `❌ Invalid code! Join ${WHATSAPP_GROUP} and type /pair to get a valid code.`
+                        text: `❌ *Invalid code!*\n\nJoin ${WHATSAPP_GROUP} and type /pair to get a valid code.`
                     });
                 }
                 return;
@@ -702,6 +717,82 @@ async function startBot() {
                         }
                         break;
 
+                    // FIXED: /role now works with mentions and numbers
+                    case 'role':
+                        let targetUser = user;
+                        let targetSender = sender;
+                        let targetName = user.name;
+                        
+                        if (args.length) {
+                            const lookup = args[0];
+                            
+                            // Check if it's a mention
+                            if (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
+                                targetSender = msg.message.extendedTextMessage.contextInfo.mentionedJid[0];
+                                targetUser = await User.findOne({ jid: targetSender });
+                                targetName = targetSender.split('@')[0];
+                            } 
+                            // Check if it's a phone number
+                            else if (/^\d+$/.test(lookup) && lookup.length >= 10) {
+                                targetSender = `${lookup}@s.whatsapp.net`;
+                                targetUser = await User.findOne({ jid: targetSender });
+                                targetName = lookup;
+                            }
+                        }
+                        
+                        if (!targetUser) {
+                            targetUser = {
+                                name: targetName || 'Unknown',
+                                number: targetSender.split('@')[0],
+                                role: 'regular',
+                                paired: false,
+                                pairedSince: null,
+                                usageCount: 0,
+                                warningCount: 0,
+                                totalGroups: 0
+                            };
+                        }
+                        
+                        // Try to get profile picture
+                        let targetPic = null;
+                        try {
+                            const picUrl = await sock.profilePictureUrl(targetSender, 'image');
+                            if (picUrl) {
+                                const response = await axios.get(picUrl, { responseType: 'arraybuffer', timeout: 5000 });
+                                targetPic = Buffer.from(response.data, 'binary');
+                            }
+                        } catch (e) {
+                            // No profile picture
+                        }
+                        
+                        const isTargetOwner = targetUser.number === OWNER_NUMBER;
+                        const pairedSince = targetUser.pairedSince ? new Date(targetUser.pairedSince).toLocaleDateString() : 'Not paired';
+                        
+                        const roleText = `*✧ USER PROFILE ✧*
+
+👤 *Name:* ${targetUser.name}
+📱 *Number:* ${targetUser.number}
+👑 *Role:* ${isTargetOwner ? '🌟 OWNER' : targetUser.role}
+🔗 *Status:* ${targetUser.paired ? '✅ Paired' : '❌ Unpaired'}
+📅 *Paired:* ${pairedSince}
+📊 *Commands:* ${targetUser.usageCount}
+⚠️ *Warnings:* ${targetUser.warningCount}`;
+
+                        if (targetPic) {
+                            await sock.sendMessage(from, { 
+                                image: targetPic,
+                                caption: roleText
+                            });
+                        } else if (botImage) {
+                            await sock.sendMessage(from, { 
+                                image: botImage,
+                                caption: roleText
+                            });
+                        } else {
+                            await sock.sendMessage(from, { text: roleText });
+                        }
+                        break;
+
                     case 'play':
                         if (!args.length) {
                             await sock.sendMessage(from, { text: '❌ Usage: /play <song name>' });
@@ -731,15 +822,18 @@ async function startBot() {
                         
                         const resultText = `🎵 *${video.title}*
 
-⏱️ ${video.duration}
-🎤 ${video.channelName}
-👁️ ${video.views}
+⏱️ *Duration:* ${video.duration}
+🎤 *Artist:* ${video.channelName}
+👁️ *Views:* ${video.views}
 
 🔗 ${video.url}
 
-1️⃣ Audio
-2️⃣ Document
-0️⃣ Cancel`;
+*Select option:*
+1️⃣ 🎵 Audio
+2️⃣ 📄 Document
+0️⃣ ❌ Cancel
+
+⏰ *Expires in 2 minutes*`;
 
                         if (thumbnail) {
                             await sock.sendMessage(from, {
@@ -766,7 +860,7 @@ async function startBot() {
                         if (isGroup) {
                             if (OFFICIAL_GROUP_JID && from !== OFFICIAL_GROUP_JID) {
                                 await sock.sendMessage(from, { 
-                                    text: `❌ Join official group first:\n${WHATSAPP_GROUP}`
+                                    text: `❌ *Wrong place!*\n\nJoin our official group first:\n${WHATSAPP_GROUP}`
                                 });
                                 return;
                             }
@@ -778,7 +872,16 @@ async function startBot() {
                             });
                             
                             await sock.sendMessage(from, { 
-                                text: `🔐 *YOUR CODE:* ${pairCode}\n\nDM me this code to pair!`
+                                text: `🔐 *YOUR PAIRING CODE*
+
+\`${pairCode}\`
+
+📋 *INSTRUCTIONS:*
+1️⃣ Copy this code
+2️⃣ DM me at ${BOT_PHONE}
+3️⃣ Paste the code there
+
+⏰ *Expires in 10 minutes*`
                             });
                             
                             setTimeout(() => {
@@ -786,17 +889,11 @@ async function startBot() {
                             }, 600000);
                         } else {
                             await sock.sendMessage(from, { 
-                                text: `❌ Get code from official group first:\n${WHATSAPP_GROUP}`
+                                text: `❌ *No code found in DM*
+
+Get a code from the official group first:\n${WHATSAPP_GROUP}`
                             });
                         }
-                        break;
-
-                    case 'role':
-                        const roleText = `👤 *${user.name}*
-📱 ${user.number}
-👑 ${isOwner ? 'OWNER' : user.role}
-🔗 ${user.paired ? '✅ Paired' : '❌ Unpaired'}`;
-                        await sock.sendMessage(from, { text: roleText });
                         break;
 
                     case 'kick':
@@ -883,6 +980,7 @@ async function startBot() {
                         await sock.sendMessage(from, { text: `✅ Added ${added} members` });
                         break;
 
+                    // FIXED: /officialinfo now shows group icon
                     case 'officialinfo':
                         if (!user.paired && !isOwner) {
                             await sock.sendMessage(from, { text: '❌ You need to be paired' });
@@ -896,9 +994,43 @@ async function startBot() {
                         
                         try {
                             const officialGroup = await sock.groupMetadata(OFFICIAL_GROUP_JID);
-                            await sock.sendMessage(from, { 
-                                text: `🏢 *Official Group*\n📛 ${officialGroup.subject}\n👥 ${officialGroup.participants.length} members`
-                            });
+                            const admins = officialGroup.participants.filter(p => p.admin).length;
+                            const owner = officialGroup.participants.find(p => p.admin === 'superadmin');
+                            const ownerNumber = owner ? owner.id.split('@')[0] : 'Unknown';
+                            
+                            // Try to get group icon
+                            let groupIcon = null;
+                            try {
+                                const iconUrl = await sock.profilePictureUrl(OFFICIAL_GROUP_JID, 'image');
+                                if (iconUrl) {
+                                    groupIcon = await downloadImage(iconUrl);
+                                }
+                            } catch (e) {}
+                            
+                            const officialText = `*🏢 OFFICIAL GROUP INFO*
+
+📛 *Name:* ${officialGroup.subject}
+👥 *Members:* ${officialGroup.participants.length}
+👑 *Admins:* ${admins}
+👤 *Owner:* @${ownerNumber}
+🔗 *Status:* Active
+
+💡 *Users must be in this group to pair*`;
+
+                            if (groupIcon) {
+                                await sock.sendMessage(from, {
+                                    image: groupIcon,
+                                    caption: officialText,
+                                    mentions: [owner?.id]
+                                });
+                            } else if (botImage) {
+                                await sock.sendMessage(from, {
+                                    image: botImage,
+                                    caption: officialText
+                                });
+                            } else {
+                                await sock.sendMessage(from, { text: officialText });
+                            }
                         } catch (error) {
                             await sock.sendMessage(from, { text: '❌ Error fetching group info' });
                         }
@@ -918,7 +1050,7 @@ async function startBot() {
                         const officialMeta = await sock.groupMetadata(from);
                         await saveOfficialGroup(from, officialMeta.subject);
                         await sock.sendMessage(from, { 
-                            text: `✅ Official group set to: ${officialMeta.subject}`
+                            text: `✅ *Official Group Set!*\n\n📛 ${officialMeta.subject}\n👥 ${officialMeta.participants.length} members`
                         });
                         break;
 
