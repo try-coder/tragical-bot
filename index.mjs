@@ -1,4 +1,4 @@
-// index.mjs - Main Bot Entry Point (ES Module)
+// index.mjs
 import makeWASocket from '@whiskeysockets/baileys';
 import { 
   useMultiFileAuthState, 

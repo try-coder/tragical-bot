@@ -1,9 +1,12 @@
+// utils/logger.js
 import fs from 'fs';
-import path from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const __dirname = path.resolve();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const logDir = path.join(__dirname, 'logs');
+const logDir = path.join(__dirname, '../logs');
 if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
 }
