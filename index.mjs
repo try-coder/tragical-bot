@@ -1,17 +1,26 @@
-// index.js - Main Bot Entry Point (COMPLETE FIXED VERSION)
-require('dotenv').config();
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage } = require('@whiskeysockets/baileys');
-const Pino = require('pino');
-const qrcode = require('qrcode-terminal');
-const QRCode = require('qrcode');
-const axios = require('axios');
-const connectDB = require('./config/database');
-const { log } = require('./utils/logger');
-const User = require('./models/User');
-const Settings = require('./models/Settings');
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
+// index.mjs - Main Bot Entry Point (ES Module)
+import makeWASocket from '@whiskeysockets/baileys';
+import { 
+  useMultiFileAuthState, 
+  DisconnectReason, 
+  fetchLatestBaileysVersion, 
+  downloadContentFromMessage 
+} from '@whiskeysockets/baileys';
+import Pino from 'pino';
+import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
+import axios from 'axios';
+import connectDB from './config/database.js';
+import { log } from './utils/logger.js';
+import User from './models/User.js';
+import Settings from './models/Settings.js';
+import fs from 'fs';
+import path from 'path';
+import http from 'http';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Constants
 const BOT_PIC = "https://i.pinimg.com/736x/e8/2a/ca/e82acad97e2c9e1825f164b8e6903a4a.jpg";
@@ -20,7 +29,7 @@ const DISCORD_SERVER = "discord.gg/Hc3nwWJyep";
 const OWNER_NUMBER = "7989176070256";
 const BOT_PHONE = "254787031145";
 
-// DaveX API (NEW!)
+// DaveX API
 const DAVEX_API = 'https://api.davidxtech.de';
 const DAVEX_HEADERS = {
     'X-API-Key': '1',
@@ -34,7 +43,7 @@ const pendingPairs = new Map();
 // Group settings
 const antilinkGroups = new Set();
 const antispamGroups = new Set();
-const userWarnings = new Map(); // userId -> { count, lastWarn }
+const userWarnings = new Map();
 
 // Official group JID
 let OFFICIAL_GROUP_JID = null;
@@ -257,7 +266,7 @@ async function downloadImage(url) {
     }
 }
 
-// NEW: DaveX API Search Function
+// DaveX API Search Function
 async function searchYouTubeViaDavex(query) {
     try {
         const response = await axios.get(`${DAVEX_API}/search/youtube`, {
@@ -287,10 +296,9 @@ async function searchYouTubeViaDavex(query) {
     }
 }
 
-// NEW: DaveX API Download Function
+// DaveX API Download Function
 async function downloadViaDavex(videoId) {
     try {
-        // Step 1: Request download
         const downloadRequest = await axios.post(`${DAVEX_API}/download/audio`, {
             url: `https://youtube.com/watch?v=${videoId}`,
             format: 'mp3'
@@ -300,7 +308,6 @@ async function downloadViaDavex(videoId) {
         });
         
         if (downloadRequest.data?.status === 'ok' && downloadRequest.data?.data?.downloadUrl) {
-            // Step 2: Download the actual file
             const fileResponse = await axios.get(downloadRequest.data.data.downloadUrl, {
                 responseType: 'arraybuffer',
                 timeout: 60000,
@@ -325,7 +332,7 @@ async function downloadViaDavex(videoId) {
     }
 }
 
-// NEW: Function to download view-once media
+// Download view-once media
 async function downloadViewOnceMessage(msg) {
     try {
         const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
@@ -496,7 +503,7 @@ async function startBot() {
                 }
             }
 
-            // NEW: Handle .cc command for view-once messages
+            // Handle .cc command for view-once messages
             if (text === '.cc' && msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
                 if (!user.paired && !isOwner) {
                     await sock.sendMessage(from, { text: '❌ You need to be paired to use this command' });
@@ -522,7 +529,7 @@ async function startBot() {
                 return;
             }
 
-            // NEW: Handle download responses with DaveX API
+            // Handle download responses with DaveX API
             if (pendingDownloads.has(sender) && /^[12]$/.test(text)) {
                 const downloadData = pendingDownloads.get(sender);
                 const choice = parseInt(text);

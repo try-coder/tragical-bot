@@ -1,5 +1,4 @@
-// models/Settings.js
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const SettingsSchema = new mongoose.Schema({
     key: { type: String, required: true, unique: true },
@@ -11,4 +10,4 @@ SettingsSchema.pre('save', function() {
     this.updatedAt = Date.now();
 });
 
-module.exports = mongoose.model('Settings', SettingsSchema);
+export default mongoose.model('Settings', SettingsSchema);
