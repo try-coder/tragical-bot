@@ -1,4 +1,16 @@
-// index.mjs
+// index.mjs - Main Bot Entry Point (FIXED ENV LOADING)
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load environment variables FIRST
+dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Now import everything else
 import makeWASocket from '@whiskeysockets/baileys';
 import { 
   useMultiFileAuthState, 
@@ -15,12 +27,7 @@ import { log } from './utils/logger.js';
 import User from './models/User.js';
 import Settings from './models/Settings.js';
 import fs from 'fs';
-import path from 'path';
 import http from 'http';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Constants
 const BOT_PIC = "https://i.pinimg.com/736x/e8/2a/ca/e82acad97e2c9e1825f164b8e6903a4a.jpg";
@@ -32,7 +39,7 @@ const BOT_PHONE = "254787031145";
 // DaveX API
 const DAVEX_API = 'https://api.davidxtech.de';
 const DAVEX_HEADERS = {
-    'X-API-Key': '1',
+    'X-API-Key': 'FREE-TEST-KEY-3000',
     'Content-Type': 'application/json'
 };
 
