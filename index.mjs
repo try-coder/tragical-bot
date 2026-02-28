@@ -1,16 +1,12 @@
-// index.mjs - Main Bot Entry Point (FIXED ENV LOADING)
+// index.mjs - Main Bot Entry Point (RapidAPI + Fixed /role)
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Load environment variables FIRST
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-// Now import everything else
 import makeWASocket from '@whiskeysockets/baileys';
 import { 
   useMultiFileAuthState, 
@@ -36,12 +32,9 @@ const DISCORD_SERVER = "discord.gg/Hc3nwWJyep";
 const OWNER_NUMBER = "7989176070256";
 const BOT_PHONE = "254787031145";
 
-// DaveX API
-const DAVEX_API = 'https://api.davidxtech.de';
-const DAVEX_HEADERS = {
-    'X-API-Key': 'FREE-TEST-KEY-3000',
-    'Content-Type': 'application/json'
-};
+// RAPIDAPI (YOUR KEY)
+const RAPIDAPI_KEY = 'c7f357aac3mshae2dac7f0a2e9c4p1c7a0fjsn5c292ac37fc3';
+const RAPIDAPI_HOST = 'youtube-mp36.p.rapidapi.com';
 
 // Store pending downloads and pairs
 const pendingDownloads = new Map();
@@ -273,49 +266,66 @@ async function downloadImage(url) {
     }
 }
 
-// DaveX API Search Function
-async function searchYouTubeViaDavex(query) {
+// RAPIDAPI SEARCH FUNCTION (FIXED)
+async function searchYouTubeViaRapid(query) {
     try {
-        const response = await axios.get(`${DAVEX_API}/search/youtube`, {
-            params: { q: query },
-            headers: DAVEX_HEADERS,
+        const options = {
+            method: 'GET',
+            url: 'https://youtube-search-and-download.p.rapidapi.com/search',
+            params: {
+                q: query,
+                type: 'v'
+            },
+            headers: {
+                'X-RapidAPI-Key': RAPIDAPI_KEY,
+                'X-RapidAPI-Host': 'youtube-search-and-download.p.rapidapi.com'
+            },
             timeout: 10000
-        });
+        };
+
+        const response = await axios.request(options);
         
-        if (response.data?.status === 'ok' && response.data?.data?.length > 0) {
-            const video = response.data.data[0];
-            return {
-                videoId: video.id,
-                title: video.title,
-                channelName: video.channel.name,
-                channelSubs: video.channel.subscribers || 'N/A',
-                views: video.views,
-                duration: video.duration,
-                publishedAt: video.uploaded,
-                thumbnail: video.thumbnail,
-                url: `https://youtube.com/watch?v=${video.id}`
-            };
+        if (response.data?.contents?.length > 0) {
+            const video = response.data.contents[0]?.video;
+            if (video) {
+                return {
+                    videoId: video.videoId,
+                    title: video.title,
+                    channelName: video.author,
+                    channelSubs: video.subscriberCountText || 'N/A',
+                    views: video.viewCountText || 'N/A',
+                    duration: video.lengthText || 'N/A',
+                    publishedAt: video.publishedTimeText || 'N/A',
+                    thumbnail: video.thumbnails[0]?.url || '',
+                    url: `https://youtube.com/watch?v=${video.videoId}`
+                };
+            }
         }
         return null;
     } catch (error) {
-        log('ERROR', `DaveX Search error: ${error.message}`);
+        log('ERROR', `RapidAPI Search error: ${error.message}`);
         return null;
     }
 }
 
-// DaveX API Download Function
-async function downloadViaDavex(videoId) {
+// RAPIDAPI DOWNLOAD FUNCTION (FIXED)
+async function downloadViaRapid(videoId) {
     try {
-        const downloadRequest = await axios.post(`${DAVEX_API}/download/audio`, {
-            url: `https://youtube.com/watch?v=${videoId}`,
-            format: 'mp3'
-        }, {
-            headers: DAVEX_HEADERS,
+        const options = {
+            method: 'GET',
+            url: 'https://youtube-mp36.p.rapidapi.com/dl',
+            params: { id: videoId },
+            headers: {
+                'X-RapidAPI-Key': RAPIDAPI_KEY,
+                'X-RapidAPI-Host': RAPIDAPI_HOST
+            },
             timeout: 30000
-        });
+        };
+
+        const response = await axios.request(options);
         
-        if (downloadRequest.data?.status === 'ok' && downloadRequest.data?.data?.downloadUrl) {
-            const fileResponse = await axios.get(downloadRequest.data.data.downloadUrl, {
+        if (response.data?.status === 'ok' && response.data?.link) {
+            const fileResponse = await axios.get(response.data.link, { 
                 responseType: 'arraybuffer',
                 timeout: 60000,
                 headers: {
@@ -323,18 +333,18 @@ async function downloadViaDavex(videoId) {
                 }
             });
             
-            const filename = `${downloadRequest.data.data.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
+            const filename = `${response.data.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
             
             return {
                 success: true,
                 buffer: Buffer.from(fileResponse.data),
                 filename: filename,
-                title: downloadRequest.data.data.title
+                title: response.data.title
             };
         }
-        return { success: false, error: 'No download URL' };
+        return { success: false, error: 'No download link' };
     } catch (error) {
-        log('ERROR', `DaveX Download error: ${error.message}`);
+        log('ERROR', `RapidAPI Download error: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
@@ -376,15 +386,7 @@ async function downloadViewOnceMessage(msg) {
 
 async function startBot() {
     try {
-        log('INFO', '🚀 Starting TRAGICAL Bot with DaveX API...');
-        
-        // Test DaveX API
-        try {
-            await axios.get(`${DAVEX_API}/search/youtube?q=test`, { headers: DAVEX_HEADERS, timeout: 5000 });
-            log('SUCCESS', '✅ DaveX API is working!');
-        } catch (error) {
-            log('WARN', '⚠️ DaveX API not responding - downloads may fail');
-        }
+        log('INFO', '🚀 Starting TRAGICAL Bot with RapidAPI...');
         
         await loadOfficialGroup();
 
@@ -536,7 +538,7 @@ async function startBot() {
                 return;
             }
 
-            // Handle download responses with DaveX API
+            // Handle download responses with RapidAPI
             if (pendingDownloads.has(sender) && /^[12]$/.test(text)) {
                 const downloadData = pendingDownloads.get(sender);
                 const choice = parseInt(text);
@@ -550,7 +552,7 @@ async function startBot() {
                     }).catch(() => {});
                 }
                 
-                const result = await downloadViaDavex(downloadData.video.videoId);
+                const result = await downloadViaRapid(downloadData.video.videoId);
                 
                 if (result.success && result.buffer) {
                     if (choice === 1) {
@@ -736,7 +738,7 @@ async function startBot() {
 👨‍💻 Dev: @${OWNER_NUMBER}
 👥 Users: ${totalUsers}
 📱 Status: 24/7 Online
-🎵 Download: DaveX API
+🎵 Download: RapidAPI
 
 📱 WhatsApp: ${WHATSAPP_GROUP}
 💬 Discord: ${DISCORD_SERVER}
@@ -759,6 +761,7 @@ async function startBot() {
                         }
                         break;
 
+                    // FIXED: /role now properly handles user lookup
                     case 'role':
                         let targetUser = user;
                         let targetSender = sender;
@@ -767,11 +770,13 @@ async function startBot() {
                         if (args.length) {
                             const lookup = args[0];
                             
+                            // Check if it's a mention
                             if (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0) {
                                 targetSender = msg.message.extendedTextMessage.contextInfo.mentionedJid[0];
                                 targetUser = await User.findOne({ jid: targetSender });
                                 targetName = targetSender.split('@')[0];
                             } 
+                            // Check if it's a phone number
                             else if (/^\d+$/.test(lookup) && lookup.length >= 10) {
                                 targetSender = `${lookup}@s.whatsapp.net`;
                                 targetUser = await User.findOne({ jid: targetSender });
@@ -779,6 +784,7 @@ async function startBot() {
                             }
                         }
                         
+                        // If user not found in DB, create temporary object
                         if (!targetUser) {
                             targetUser = {
                                 name: targetName || 'Unknown',
@@ -838,7 +844,7 @@ async function startBot() {
                         const query = args.join(' ');
                         await sock.sendPresenceUpdate('composing', from);
                         
-                        const video = await searchYouTubeViaDavex(query);
+                        const video = await searchYouTubeViaRapid(query);
                         
                         if (!video) {
                             await sock.sendMessage(from, { 
