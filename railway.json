@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "npm install"
+    "buildCommand": "apt-get update && apt-get install -y git && npm install"
   },
   "deploy": {
     "startCommand": "node index.js",
