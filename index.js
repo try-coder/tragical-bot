@@ -12,7 +12,6 @@ const Settings = require('./models/Settings');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const ytdl = require('ytdl-core');
 
 // Constants
 const BOT_PIC = "https://i.pinimg.com/736x/e8/2a/ca/e82acad97e2c9e1825f164b8e6903a4a.jpg";
@@ -21,8 +20,12 @@ const DISCORD_SERVER = "discord.gg/Hc3nwWJyep";
 const OWNER_NUMBER = "7989176070256";
 const BOT_PHONE = "254787031145";
 
-// YouTube API Key
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+// DaveX API (NEW!)
+const DAVEX_API = 'https://api.davidxtech.de';
+const DAVEX_HEADERS = {
+    'X-API-Key': '1',
+    'Content-Type': 'application/json'
+};
 
 // Store pending downloads and pairs
 const pendingDownloads = new Map();
@@ -254,137 +257,72 @@ async function downloadImage(url) {
     }
 }
 
-// YouTube Search Function
-async function searchYouTube(query) {
+// NEW: DaveX API Search Function
+async function searchYouTubeViaDavex(query) {
     try {
-        const searchResponse = await axios.get('https://www.googleapis.com/youtube/v3/search', {
-            params: {
-                part: 'snippet',
-                q: query,
-                type: 'video',
-                maxResults: 1,
-                key: YOUTUBE_API_KEY
-            }
+        const response = await axios.get(`${DAVEX_API}/search/youtube`, {
+            params: { q: query },
+            headers: DAVEX_HEADERS,
+            timeout: 10000
         });
-
-        if (!searchResponse.data.items || searchResponse.data.items.length === 0) {
-            return null;
+        
+        if (response.data?.status === 'ok' && response.data?.data?.length > 0) {
+            const video = response.data.data[0];
+            return {
+                videoId: video.id,
+                title: video.title,
+                channelName: video.channel.name,
+                channelSubs: video.channel.subscribers || 'N/A',
+                views: video.views,
+                duration: video.duration,
+                publishedAt: video.uploaded,
+                thumbnail: video.thumbnail,
+                url: `https://youtube.com/watch?v=${video.id}`
+            };
         }
-
-        const video = searchResponse.data.items[0];
-        const videoId = video.id.videoId;
-
-        const statsResponse = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
-            params: {
-                part: 'statistics,contentDetails',
-                id: videoId,
-                key: YOUTUBE_API_KEY
-            }
-        });
-
-        const stats = statsResponse.data.items[0];
-
-        const channelResponse = await axios.get('https://www.googleapis.com/youtube/v3/channels', {
-            params: {
-                part: 'statistics',
-                id: video.snippet.channelId,
-                key: YOUTUBE_API_KEY
-            }
-        });
-
-        const channel = channelResponse.data.items[0];
-
-        return {
-            videoId: videoId,
-            title: video.snippet.title,
-            channelName: video.snippet.channelTitle,
-            channelSubs: formatNumber(channel?.statistics?.subscriberCount),
-            views: formatNumber(stats?.statistics?.viewCount),
-            duration: formatDuration(stats?.contentDetails?.duration),
-            publishedAt: formatDate(video.snippet.publishedAt),
-            thumbnail: video.snippet.thumbnails.high.url,
-            url: `https://youtube.com/watch?v=${videoId}`
-        };
+        return null;
     } catch (error) {
-        log('ERROR', `YouTube API Error: ${error.message}`);
+        log('ERROR', `DaveX Search error: ${error.message}`);
         return null;
     }
 }
 
-// FIXED: Download using ytdl-core (more reliable than RapidAPI)
-async function downloadViaYTDL(videoId) {
+// NEW: DaveX API Download Function
+async function downloadViaDavex(videoId) {
     try {
-        const url = `https://www.youtube.com/watch?v=${videoId}`;
-        console.log('🎵 Downloading with ytdl:', url);
-        
-        const info = await ytdl.getInfo(url);
-        const title = info.videoDetails.title;
-        
-        // Get audio stream
-        const stream = ytdl(url, {
-            quality: 'highestaudio',
-            filter: 'audioonly'
+        // Step 1: Request download
+        const downloadRequest = await axios.post(`${DAVEX_API}/download/audio`, {
+            url: `https://youtube.com/watch?v=${videoId}`,
+            format: 'mp3'
+        }, {
+            headers: DAVEX_HEADERS,
+            timeout: 30000
         });
         
-        const chunks = [];
-        
-        return new Promise((resolve, reject) => {
-            stream.on('data', chunk => chunks.push(chunk));
-            stream.on('end', () => {
-                const buffer = Buffer.concat(chunks);
-                const filename = `${title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
-                console.log('✅ Download complete:', filename);
-                resolve({
-                    success: true,
-                    buffer: buffer,
-                    filename: filename,
-                    title: title
-                });
+        if (downloadRequest.data?.status === 'ok' && downloadRequest.data?.data?.downloadUrl) {
+            // Step 2: Download the actual file
+            const fileResponse = await axios.get(downloadRequest.data.data.downloadUrl, {
+                responseType: 'arraybuffer',
+                timeout: 60000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
             });
-            stream.on('error', (error) => {
-                console.error('❌ Stream error:', error);
-                reject(error);
-            });
-        });
+            
+            const filename = `${downloadRequest.data.data.title.replace(/[^\w\s-]/g, '').replace(/\s+/g, '_')}.mp3`;
+            
+            return {
+                success: true,
+                buffer: Buffer.from(fileResponse.data),
+                filename: filename,
+                title: downloadRequest.data.data.title
+            };
+        }
+        return { success: false, error: 'No download URL' };
     } catch (error) {
-        console.error('❌ ytdl error:', error.message);
-        log('ERROR', `ytdl download error: ${error.message}`);
+        log('ERROR', `DaveX Download error: ${error.message}`);
         return { success: false, error: error.message };
     }
-}
-
-// Helper functions
-function formatNumber(num) {
-    if (!num) return 'N/A';
-    num = parseInt(num);
-    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
-    return num.toString();
-}
-
-function formatDuration(duration) {
-    if (!duration) return 'N/A';
-    const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
-    const hours = (match[1] || '').replace('H', '');
-    const minutes = (match[2] || '').replace('M', '');
-    const seconds = (match[3] || '').replace('S', '');
-    
-    let result = '';
-    if (hours) result += hours + ':';
-    result += (minutes.padStart(2, '0') || '00') + ':';
-    result += seconds.padStart(2, '0') || '00';
-    return result;
-}
-
-function formatDate(dateString) {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
-    
-    if (diffDays < 1) return 'Today';
-    if (diffDays < 30) return `${diffDays} days ago`;
-    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
-    return `${Math.floor(diffDays / 365)} years ago`;
 }
 
 // NEW: Function to download view-once media
@@ -424,7 +362,15 @@ async function downloadViewOnceMessage(msg) {
 
 async function startBot() {
     try {
-        log('INFO', '🚀 Starting TRAGICAL Bot...');
+        log('INFO', '🚀 Starting TRAGICAL Bot with DaveX API...');
+        
+        // Test DaveX API
+        try {
+            await axios.get(`${DAVEX_API}/search/youtube?q=test`, { headers: DAVEX_HEADERS, timeout: 5000 });
+            log('SUCCESS', '✅ DaveX API is working!');
+        } catch (error) {
+            log('WARN', '⚠️ DaveX API not responding - downloads may fail');
+        }
         
         await loadOfficialGroup();
 
@@ -576,7 +522,7 @@ async function startBot() {
                 return;
             }
 
-            // Handle download responses
+            // NEW: Handle download responses with DaveX API
             if (pendingDownloads.has(sender) && /^[12]$/.test(text)) {
                 const downloadData = pendingDownloads.get(sender);
                 const choice = parseInt(text);
@@ -590,7 +536,7 @@ async function startBot() {
                     }).catch(() => {});
                 }
                 
-                const result = await downloadViaYTDL(downloadData.video.videoId);
+                const result = await downloadViaDavex(downloadData.video.videoId);
                 
                 if (result.success && result.buffer) {
                     if (choice === 1) {
@@ -740,15 +686,15 @@ async function startBot() {
 │  📋 /menu     - Show this menu
 │  ℹ️ /info     - Bot info
 │  👤 /role     - Your profile
-│  🎵 /play     - Search music
+│  🎵 /play     - Search & download music
 │  🔐 /pair     - Get pairing code
 │  🏓 /ping     - Check response
 │  📸 .cc       - Recover view once
 │                            
 │  ✦ *PAIRED COMMANDS* ✦
-│  👢 /kick     - Kick user
-│  ➕ /add      - Add members
-│  🏢 /officialinfo - Group info
+│  👢 /kick     - Kick user (group admin)
+│  ➕ /add      - Add members (numbers)
+│  🏢 /officialinfo - Official group info
 │  🔗 /antilink - Toggle anti-link
 │  🚫 /antispam - Toggle anti-spam
 │                            
@@ -756,7 +702,8 @@ async function startBot() {
 │  ⚙️ /setofficial - Set official group
 ╰─────────────────────────╯
 
-🌐 WhatsApp › ${WHATSAPP_GROUP}`;
+🌐 WhatsApp › ${WHATSAPP_GROUP}
+💬 Discord  › ${DISCORD_SERVER}`;
 
                         if (botImage) {
                             await sock.sendMessage(from, { 
@@ -775,6 +722,7 @@ async function startBot() {
 👨‍💻 Dev: @${OWNER_NUMBER}
 👥 Users: ${totalUsers}
 📱 Status: 24/7 Online
+🎵 Download: DaveX API
 
 📱 WhatsApp: ${WHATSAPP_GROUP}
 💬 Discord: ${DISCORD_SERVER}
@@ -876,7 +824,7 @@ async function startBot() {
                         const query = args.join(' ');
                         await sock.sendPresenceUpdate('composing', from);
                         
-                        const video = await searchYouTube(query);
+                        const video = await searchYouTubeViaDavex(query);
                         
                         if (!video) {
                             await sock.sendMessage(from, { 
@@ -925,7 +873,6 @@ async function startBot() {
                         }, 120000);
                         break;
 
-                    // NEW: Anti-Link command
                     case 'antilink':
                         if (!user.paired && !isOwner) {
                             await sock.sendMessage(from, { text: '❌ You need to be paired' });
@@ -954,7 +901,6 @@ async function startBot() {
                         }
                         break;
 
-                    // NEW: Anti-Spam command
                     case 'antispam':
                         if (!user.paired && !isOwner) {
                             await sock.sendMessage(from, { text: '❌ You need to be paired' });
@@ -1051,23 +997,51 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                             return;
                         }
                         
+                        let targets = [];
+                        
                         const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-                        if (!mentions.length) {
-                            await sock.sendMessage(from, { text: '❌ Mention user: /kick @user' });
+                        if (mentions.length > 0) {
+                            targets = mentions;
+                        } else if (args[0] === 'all') {
+                            if (!isOwner) {
+                                await sock.sendMessage(from, { text: '❌ Only bot owner can kick all members' });
+                                return;
+                            }
+                            targets = groupInfo.participants
+                                .filter(p => !p.admin && p.id !== sock.user?.id)
+                                .map(p => p.id);
+                        } else if (/^\d+$/.test(args[0])) {
+                            targets = [`${args[0]}@s.whatsapp.net`];
+                        } else {
+                            await sock.sendMessage(from, { text: '❌ Usage: /kick @user or /kick <number> or /kick all' });
                             return;
                         }
                         
-                        for (const target of mentions) {
+                        if (targets.length === 0) {
+                            await sock.sendMessage(from, { text: '❌ No valid users to kick' });
+                            return;
+                        }
+                        
+                        let kickedCount = 0;
+                        let failedCount = 0;
+                        
+                        for (const target of targets) {
                             try {
+                                if (target === sock.user?.id || target === sender) continue;
+                                
                                 await sock.groupParticipantsUpdate(from, [target], 'remove');
-                                await sock.sendMessage(from, { 
-                                    text: `✅ Kicked @${target.split('@')[0]}`,
-                                    mentions: [target]
-                                });
+                                kickedCount++;
+                                
+                                await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
                             } catch (error) {
-                                log('ERROR', `Failed to kick: ${error.message}`);
+                                failedCount++;
+                                log('ERROR', `Failed to kick ${target}: ${error.message}`);
                             }
                         }
+                        
+                        await sock.sendMessage(from, { 
+                            text: `👢 *Kick Results*\n✅ Kicked: ${kickedCount}\n❌ Failed: ${failedCount}`
+                        });
                         break;
 
                     case 'add':
@@ -1189,7 +1163,7 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                 }
             }
 
-            // NEW: Auto Anti-Link detection
+            // Auto Anti-Link detection
             if (isGroup && antilinkGroups.has(from) && !isGroupAdmin && !isGroupOwner && !isOwner) {
                 const linkRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|chat\.whatsapp\.com|t\.me|discord\.gg)/i;
                 if (linkRegex.test(text)) {
@@ -1203,7 +1177,6 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                             }
                         });
                         
-                        // Warning system
                         const warningKey = `${from}-${sender}`;
                         const warningData = userWarnings.get(warningKey) || { count: 0, lastWarn: 0 };
                         
@@ -1232,7 +1205,7 @@ Get a code from the official group first:\n${WHATSAPP_GROUP}`
                 }
             }
 
-            // NEW: Auto Anti-Spam detection
+            // Auto Anti-Spam detection
             if (isGroup && antispamGroups.has(from) && !isGroupAdmin && !isGroupOwner && !isOwner) {
                 const spamKey = `${from}-${sender}`;
                 const spamData = userWarnings.get(spamKey) || { count: 0, lastMsg: 0 };
@@ -1298,16 +1271,12 @@ setInterval(() => {
         }
     }
     
-    // Clean old warnings
     for (const [key, data] of userWarnings.entries()) {
         if (now - data.lastWarn > 3600000) {
             userWarnings.delete(key);
         }
     }
 }, 60000);
-
-// Install required package
-console.log('📦 Make sure to run: npm install ytdl-core');
 
 // Start the bot
 startBot();
